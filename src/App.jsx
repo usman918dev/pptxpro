@@ -245,21 +245,21 @@ const DEFAULT_SLOTS = [
 ]
 
 const DESILTING_PRESET_TEXT = [
-  'UC-55',
-  'UC-56',
-  'UC-57',
-  'UC-58',
-  'UC-59',
-  'UC-60',
-  'UC-61',
-  'UC-62',
-  'UC-63',
-  'UC-64',
-  'UC-65',
-  'UC-66',
-  'UC-67',
-  'UC-68',
-  'UC-69',
+  'UC-55 Rana',
+  'UC-56 Saroye',
+  'UC-57 Lalupur',
+  'UC-58 Mari Thakran',
+  'UC-59 Bakapur',
+  'UC-60 Kotli Mutwalian',
+  'UC-61 Rajewala',
+  'UC-62 Lalupur',
+  'UC-63 Wahndo',
+  'UC-64 Tamboli',
+  'UC-65 Tolakey',
+  'UC-66 Dargapur',
+  'UC-67 Sadhoki',
+  'UC-68 Harpoki',
+  'UC-69 Ghanoki',
   'Sector-1',
   'Sector-2',
   'Sector-3',
@@ -271,6 +271,15 @@ const DESILTING_PRESET_TEXT = [
   'Sector-9',
   'Sector-10',
 ]
+
+const SLIDE_HEIGHT = 7.5
+const DESILTING_DATE_OFFSET_IN = 84 / 96
+const DESILTING_DATE_BOX = {
+  x: DESILTING_DATE_OFFSET_IN,
+  y: SLIDE_HEIGHT - DESILTING_DATE_OFFSET_IN - 0.4,
+  w: 2.4,
+  h: 0.4,
+}
 
 const getDateOffset = (offsetDays = 0) => {
   const date = new Date()
@@ -366,13 +375,20 @@ const TEMPLATES = {
     leftBox: { x: 0.16, y: 1.9, w: 4.27, h: 4.975 },
     middleBox: { x: 4.533, y: 1.9, w: 4.27, h: 4.975 },
     rightBox: { x: 8.88, y: 1.9, w: 4.27, h: 4.975 },
-    textBox: { x: 4.0, y: 0.88, w: 5.33, h: 0.5 },
+    textBox: { x: 4.0 - 8 / 96, y: 0.88, w: 5.33, h: 0.5 },
     textColor: '111111',
     textAlign: 'center',
     textFontSize: 22,
     textBold: true,
     textDefault: '',
     textLabel: 'Sector text',
+    dateSlide: 'first',
+    dateBox: DESILTING_DATE_BOX,
+    dateColor: '000000',
+    dateAlign: 'left',
+    dateFontSize: 28,
+    dateBold: true,
+    dateFontFace: 'Times New Roman',
     importSkipFirst: 1,
     importSkipLast: 1,
     imageCount: 3,
@@ -888,6 +904,13 @@ function App({ data }) {
     return () => window.removeEventListener('click', handleClick)
   }, [moveMenuIndex])
 
+  const isDesiltingTemplate =
+    template?.masterTitle === TEMPLATES[ROUTES.desilting]?.masterTitle
+  const applyDesiltingLabels = (nextPairs) =>
+    isDesiltingTemplate
+      ? mergeDesiltingPresetPairs(nextPairs, { slotKeys, textDefault })
+      : nextPairs
+
   const updatePair = (index, key, value) => {
     setPairs((prev) => {
       const next = prev.map((pair, pairIndex) =>
@@ -904,7 +927,7 @@ function App({ data }) {
         }
       }
 
-      return next
+      return applyDesiltingLabels(next)
     })
   }
 
@@ -1002,8 +1025,9 @@ function App({ data }) {
           skipLastSlides,
           imageCount: template.imageCount || slotKeys.length,
         })
+      const preparedPairs = applyDesiltingLabels(importedPairs)
       setPairs(
-        normalizePairs(importedPairs, { slotKeys, requiresText, textDefault }),
+        normalizePairs(preparedPairs, { slotKeys, requiresText, textDefault }),
       )
       const emptyNote = emptySlides
         ? ` ${emptySlides} slide(s) need images.`
@@ -1049,7 +1073,17 @@ function App({ data }) {
       }
       await removePairsFromDb(storageKey)
     } finally {
-      setPairs(normalizePairs([], { slotKeys, requiresText, textDefault }))
+      const clearedSource = resolvePairsSource({
+        storedPairs: null,
+        data: [],
+        template,
+        slotKeys,
+        textDefault,
+        requiresText,
+      })
+      setPairs(
+        normalizePairs(clearedSource, { slotKeys, requiresText, textDefault }),
+      )
       setImportStatus({ type: 'idle', message: '' })
       setDragIndex(null)
       setDragOverIndex(null)
