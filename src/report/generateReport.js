@@ -182,6 +182,14 @@ export const generateReport = async (
     textFontSize,
     textBold,
     textDefault,
+    placeholders,
+    textboxes,
+    firstSlidePlaceholders,
+    firstSlideTextboxes,
+    firstSlideData,
+    lastSlidePlaceholders,
+    lastSlideTextboxes,
+    lastSlideData,
   } = {},
 ) => {
   if (!Array.isArray(pairs) || pairs.length === 0) {
@@ -202,6 +210,9 @@ export const generateReport = async (
   }
 
   const completePairs = pairs.filter((pair) => {
+    if (placeholders && placeholders.length > 0) {
+      return placeholders.every((slot) => Boolean(pair?.[slot.key]))
+    }
     const hasBefore = Boolean(pair?.beforeImage)
     const hasAfter = Boolean(pair?.afterImage)
     const hasMiddle = hasMiddleBox ? Boolean(pair?.middleImage) : true
@@ -263,6 +274,42 @@ export const generateReport = async (
     })
   }
 
+  if (firstSlidePlaceholders && firstSlidePlaceholders.length > 0) {
+    firstSlidePlaceholders.forEach((slot) => {
+      const imageSource = normalizeImage(firstSlideData?.[slot.key])
+      if (imageSource) {
+        firstSlide.addImage({
+          ...imageSource,
+          x: slot.x,
+          y: slot.y,
+          w: slot.w,
+          h: slot.h,
+          sizing: { type: 'contain' },
+        })
+      }
+    })
+  }
+  if (firstSlideTextboxes && firstSlideTextboxes.length > 0) {
+    firstSlideTextboxes.forEach((box) => {
+      const textVal = typeof firstSlideData?.[box.key] === 'string' ? firstSlideData[box.key].trim() : ''
+      const textToUse = textVal || box.textDefault || ''
+      if (textToUse) {
+        firstSlide.addText(textToUse, {
+          x: box.x,
+          y: box.y,
+          w: box.w,
+          h: box.h,
+          fontFace: box.fontFace || 'Calibri',
+          fontSize: box.fontSize || 20,
+          color: box.fontColor || '000000',
+          align: box.align || 'left',
+          valign: 'middle',
+          bold: Boolean(box.bold),
+        })
+      }
+    })
+  }
+
   if (resolvedDateSlide === 'first') {
     addDateToSlide(firstSlide)
   }
@@ -288,24 +335,73 @@ export const generateReport = async (
   completePairs.forEach((pair) => {
     const slide = pptx.addSlide(resolvedMasterTitle)
 
-    if (showLabels) {
-      slide.addText('Before', {
-        x: resolvedLeftBox.x,
-        y: 1.6,
-        w: resolvedLeftBox.w,
-        h: 0.4,
-        fontFace: 'Calibri',
-        fontSize: 18,
-        color: '111111',
-        bold: true,
-        align: 'center',
+    if (placeholders && placeholders.length > 0) {
+      placeholders.forEach((slot) => {
+        const imageSource = normalizeImage(pair?.[slot.key])
+        if (imageSource) {
+          slide.addImage({
+            ...imageSource,
+            x: slot.x,
+            y: slot.y,
+            w: slot.w,
+            h: slot.h,
+            sizing: { type: 'contain' },
+          })
+        }
       })
 
-      if (resolvedMiddleBox) {
-        slide.addText('Middle', {
-          x: resolvedMiddleBox.x,
+      if (textboxes && textboxes.length > 0) {
+        textboxes.forEach((box) => {
+          const textVal = typeof pair?.[box.key] === 'string' ? pair[box.key].trim() : ''
+          const textToUse = textVal || box.textDefault || ''
+          if (textToUse) {
+            slide.addText(textToUse, {
+              x: box.x,
+              y: box.y,
+              w: box.w,
+              h: box.h,
+              fontFace: box.fontFace || 'Calibri',
+              fontSize: box.fontSize || 20,
+              color: box.fontColor || '000000',
+              align: box.align || 'left',
+              valign: 'middle',
+              bold: Boolean(box.bold),
+            })
+          }
+        })
+      }
+    } else {
+      if (showLabels) {
+        slide.addText('Before', {
+          x: resolvedLeftBox.x,
           y: 1.6,
-          w: resolvedMiddleBox.w,
+          w: resolvedLeftBox.w,
+          h: 0.4,
+          fontFace: 'Calibri',
+          fontSize: 18,
+          color: '111111',
+          bold: true,
+          align: 'center',
+        })
+
+        if (resolvedMiddleBox) {
+          slide.addText('Middle', {
+            x: resolvedMiddleBox.x,
+            y: 1.6,
+            w: resolvedMiddleBox.w,
+            h: 0.4,
+            fontFace: 'Calibri',
+            fontSize: 18,
+            color: '111111',
+            bold: true,
+            align: 'center',
+          })
+        }
+
+        slide.addText('After', {
+          x: resolvedRightBox.x,
+          y: 1.6,
+          w: resolvedRightBox.w,
           h: 0.4,
           fontFace: 'Calibri',
           fontSize: 18,
@@ -315,59 +411,47 @@ export const generateReport = async (
         })
       }
 
-      slide.addText('After', {
-        x: resolvedRightBox.x,
-        y: 1.6,
-        w: resolvedRightBox.w,
-        h: 0.4,
-        fontFace: 'Calibri',
-        fontSize: 18,
-        color: '111111',
-        bold: true,
-        align: 'center',
-      })
-    }
+      const beforeSource = normalizeImage(pair?.beforeImage)
+      const middleSource = normalizeImage(pair?.middleImage)
+      const afterSource = normalizeImage(pair?.afterImage)
 
-    const beforeSource = normalizeImage(pair?.beforeImage)
-    const middleSource = normalizeImage(pair?.middleImage)
-    const afterSource = normalizeImage(pair?.afterImage)
-
-    if (beforeSource) {
-      slide.addImage({
-        ...beforeSource,
-        ...resolvedLeftBox,
-        sizing: { type: 'contain' },
-      })
-    }
-
-    if (middleSource && resolvedMiddleBox) {
-      slide.addImage({
-        ...middleSource,
-        ...resolvedMiddleBox,
-        sizing: { type: 'contain' },
-      })
-    }
-
-    if (afterSource) {
-      slide.addImage({
-        ...afterSource,
-        ...resolvedRightBox,
-        sizing: { type: 'contain' },
-      })
-    }
-
-    if (hasTextBox) {
-      const slideText = resolveSlideText(pair)
-      if (slideText) {
-        slide.addText(slideText, {
-          ...textBox,
-          fontFace: 'Calibri',
-          fontSize: resolvedTextFontSize,
-          color: resolvedTextColor,
-          align: resolvedTextAlign,
-          valign: 'middle',
-          bold: resolvedTextBold,
+      if (beforeSource) {
+        slide.addImage({
+          ...beforeSource,
+          ...resolvedLeftBox,
+          sizing: { type: 'contain' },
         })
+      }
+
+      if (middleSource && resolvedMiddleBox) {
+        slide.addImage({
+          ...middleSource,
+          ...resolvedMiddleBox,
+          sizing: { type: 'contain' },
+        })
+      }
+
+      if (afterSource) {
+        slide.addImage({
+          ...afterSource,
+          ...resolvedRightBox,
+          sizing: { type: 'contain' },
+        })
+      }
+
+      if (hasTextBox) {
+        const slideText = resolveSlideText(pair)
+        if (slideText) {
+          slide.addText(slideText, {
+            ...textBox,
+            fontFace: 'Calibri',
+            fontSize: resolvedTextFontSize,
+            color: resolvedTextColor,
+            align: resolvedTextAlign,
+            valign: 'middle',
+            bold: resolvedTextBold,
+          })
+        }
       }
     }
   })
@@ -380,6 +464,42 @@ export const generateReport = async (
       x: 0,
       y: 0,
       ...SLIDE_SIZE,
+    })
+  }
+
+  if (lastSlidePlaceholders && lastSlidePlaceholders.length > 0) {
+    lastSlidePlaceholders.forEach((slot) => {
+      const imageSource = normalizeImage(lastSlideData?.[slot.key])
+      if (imageSource) {
+        lastSlide.addImage({
+          ...imageSource,
+          x: slot.x,
+          y: slot.y,
+          w: slot.w,
+          h: slot.h,
+          sizing: { type: 'contain' },
+        })
+      }
+    })
+  }
+  if (lastSlideTextboxes && lastSlideTextboxes.length > 0) {
+    lastSlideTextboxes.forEach((box) => {
+      const textVal = typeof lastSlideData?.[box.key] === 'string' ? lastSlideData[box.key].trim() : ''
+      const textToUse = textVal || box.textDefault || ''
+      if (textToUse) {
+        lastSlide.addText(textToUse, {
+          x: box.x,
+          y: box.y,
+          w: box.w,
+          h: box.h,
+          fontFace: box.fontFace || 'Calibri',
+          fontSize: box.fontSize || 20,
+          color: box.fontColor || '000000',
+          align: box.align || 'left',
+          valign: 'middle',
+          bold: Boolean(box.bold),
+        })
+      }
     })
   }
 

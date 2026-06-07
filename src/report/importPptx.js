@@ -163,12 +163,18 @@ const pickSlideImages = async (
   cache,
   imageCount = 2,
 ) => {
+  const result = {
+    beforeImage: '',
+    middleImage: '',
+    afterImage: '',
+  }
+
+  for (let i = 0; i < imageCount; i++) {
+    result[`image_${i}`] = ''
+  }
+
   if (!pictures.length) {
-    return {
-      beforeImage: '',
-      middleImage: '',
-      afterImage: '',
-    }
+    return result
   }
 
   const slideArea = slideSize.cx * slideSize.cy
@@ -177,30 +183,30 @@ const pickSlideImages = async (
 
   const nonBackground = pictures.filter((pic) => pic.area < maxBackgroundArea)
   let candidates = nonBackground.filter((pic) => pic.area >= minImageArea)
-  if (candidates.length < 2) {
+  if (candidates.length < imageCount) {
     candidates = nonBackground.length ? nonBackground : pictures
   }
 
   candidates.sort((a, b) => b.area - a.area)
-  const useThree = imageCount === 3
-  const targetCount = useThree ? 3 : 2
-  const selected = candidates.slice(0, targetCount).sort((a, b) => a.x - b.x)
+  const selected = candidates.slice(0, imageCount).sort((a, b) => a.x - b.x)
 
-  const beforeImage = selected[0]
-    ? await getImageDataUrl(zip, selected[0].target, cache)
-    : ''
-  const middleImage = useThree && selected[1]
-    ? await getImageDataUrl(zip, selected[1].target, cache)
-    : ''
-  const afterImage = (useThree ? selected[2] : selected[1])
-    ? await getImageDataUrl(zip, useThree ? selected[2].target : selected[1].target, cache)
-    : ''
-
-  return {
-    beforeImage: beforeImage || '',
-    middleImage: middleImage || '',
-    afterImage: afterImage || '',
+  for (let i = 0; i < selected.length; i++) {
+    const dataUrl = await getImageDataUrl(zip, selected[i].target, cache)
+    if (dataUrl) {
+      result[`image_${i}`] = dataUrl
+    }
   }
+
+  if (imageCount === 3) {
+    result.beforeImage = result.image_0
+    result.middleImage = result.image_1
+    result.afterImage = result.image_2
+  } else {
+    result.beforeImage = result.image_0
+    result.afterImage = result.image_1
+  }
+
+  return result
 }
 
 export const importPptxSlides = async (

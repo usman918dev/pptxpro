@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { generateReport } from './report/generateReport'
 import { importPptxSlides } from './report/importPptx'
+import { MasterDesigner } from './MasterDesigner'
 
 const EMPTY_PAIR = {
   beforeImage: '',
@@ -20,6 +21,7 @@ const ROUTES = {
   compliance: '/compliance',
   desilting: '/desilting',
   dailyPlot: '/daily-plot',
+  master: '/master',
 }
 
 const STORAGE_PREFIX = 'pptxpro:slides:v1'
@@ -160,10 +162,6 @@ const loadStoredPairsSync = (storageKey) => {
 }
 
 const loadStoredPairs = async (storageKey) => {
-  const fromLocal = loadStoredPairsSync(storageKey)
-  if (fromLocal !== null) {
-    return fromLocal
-  }
   return await loadPairsFromDb(storageKey)
 }
 
@@ -206,26 +204,12 @@ const savePairsToStorage = (storageKey, pairs, { slotKeys, requiresText }) => {
     const prepared = buildStoredPairs(pairs, slotKeys)
     const trimmed = trimTrailingEmptyPairs(prepared, { slotKeys, requiresText })
     if (trimmed.length === 0) {
-      if (canUseStorage()) {
-        window.localStorage.removeItem(storageKey)
-      }
       void removePairsFromDb(storageKey)
       return
     }
-    let savedToLocal = false
-    if (canUseStorage()) {
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify(trimmed))
-        savedToLocal = true
-      } catch {
-        savedToLocal = false
-      }
-    }
-    if (!savedToLocal || canUseIndexedDb()) {
-      void savePairsToDb(storageKey, trimmed)
-    }
+    void savePairsToDb(storageKey, trimmed)
   } catch {
-    // Ignore storage errors (e.g. quota exceeded).
+    // Ignore storage errors.
   }
 }
 
@@ -245,21 +229,21 @@ const DEFAULT_SLOTS = [
 ]
 
 const DESILTING_PRESET_TEXT = [
-  'UC-55 Rana',
-  'UC-56 Saroye',
-  'UC-57 Lalupur',
-  'UC-58 Mari Thakran',
-  'UC-59 Bakapur',
-  'UC-60 Kotli Mutwalian',
-  'UC-61 Rajewala',
-  'UC-62 Lalupur',
-  'UC-63 Wahndo',
-  'UC-64 Tamboli',
-  'UC-65 Tolakey',
-  'UC-66 Dargapur',
-  'UC-67 Sadhoki',
-  'UC-68 Harpoki',
-  'UC-69 Ghanoki',
+  'UC-55',
+  'UC-56',
+  'UC-57',
+  'UC-58',
+  'UC-59',
+  'UC-60',
+  'UC-61',
+  'UC-62',
+  'UC-63',
+  'UC-64',
+  'UC-65',
+  'UC-66',
+  'UC-67',
+  'UC-68',
+  'UC-69',
   'Sector-1',
   'Sector-2',
   'Sector-3',
@@ -271,15 +255,6 @@ const DESILTING_PRESET_TEXT = [
   'Sector-9',
   'Sector-10',
 ]
-
-const SLIDE_HEIGHT = 7.5
-const DESILTING_DATE_OFFSET_IN = 84 / 96
-const DESILTING_DATE_BOX = {
-  x: DESILTING_DATE_OFFSET_IN,
-  y: SLIDE_HEIGHT - DESILTING_DATE_OFFSET_IN - 0.4,
-  w: 2.4,
-  h: 0.4,
-}
 
 const getDateOffset = (offsetDays = 0) => {
   const date = new Date()
@@ -320,7 +295,7 @@ const TEMPLATES = {
     title: 'Plots Cleaning-Activity',
     subtext:
       'Drop a Before and After image. A new row appears automatically and the page scrolls to it.',
-    masterBgUrl: '/master-slide.png',
+    masterBgUrl: '/master-slide.jpeg',
     firstSlideUrl: '/first-slide.png',
     secondSlideUrl: '',
     lastSlideUrl: '/last-slide.png',
@@ -375,20 +350,13 @@ const TEMPLATES = {
     leftBox: { x: 0.16, y: 1.9, w: 4.27, h: 4.975 },
     middleBox: { x: 4.533, y: 1.9, w: 4.27, h: 4.975 },
     rightBox: { x: 8.88, y: 1.9, w: 4.27, h: 4.975 },
-    textBox: { x: 4.0 - 8 / 96, y: 0.88, w: 5.33, h: 0.5 },
+    textBox: { x: 4.0, y: 0.88, w: 5.33, h: 0.5 },
     textColor: '111111',
     textAlign: 'center',
     textFontSize: 22,
     textBold: true,
     textDefault: '',
     textLabel: 'Sector text',
-    dateSlide: 'first',
-    dateBox: DESILTING_DATE_BOX,
-    dateColor: '000000',
-    dateAlign: 'left',
-    dateFontSize: 28,
-    dateBold: true,
-    dateFontFace: 'Times New Roman',
     importSkipFirst: 1,
     importSkipLast: 1,
     imageCount: 3,
@@ -443,8 +411,49 @@ const TEMPLATES = {
   },
 }
 
+const loadCustomLayoutSync = () => {
+  try {
+    const raw = window.localStorage.getItem('pptxpro:custom-master-layout')
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
 const getTemplateForPath = (path) => {
   const normalized = normalizeRoute(path)
+  if (normalized === ROUTES.master) {
+    const customLayout = loadCustomLayoutSync()
+    return {
+      eyebrow: 'Custom Master',
+      title: 'Custom Template Report',
+      subtext: 'Drop images into your custom placeholders. Slides are created automatically.',
+      masterBgUrl: customLayout?.masterBgUrl || '',
+      firstSlideUrl: customLayout?.firstSlideUrl || '',
+      secondSlideUrl: '',
+      lastSlideUrl: customLayout?.lastSlideUrl || '',
+      fileNamePrefix: 'Custom_Report',
+      masterTitle: 'CUSTOM_MASTER',
+      slideTitle: 'Custom Report',
+      themeLabel: 'Custom master slide background',
+      importSkipFirst: 1,
+      importSkipLast: 1,
+      imageCount: customLayout?.placeholders?.length || 0,
+      slots: (customLayout?.placeholders || []).map((p) => ({
+        key: p.key,
+        label: p.label,
+        className: 'slide-slot',
+        style: {
+          left: `${(p.x / 13.333) * 100}%`,
+          top: `${(p.y / 7.5) * 100}%`,
+          width: `${(p.w / 13.333) * 100}%`,
+          height: `${(p.h / 7.5) * 100}%`,
+          position: 'absolute',
+        }
+      })),
+      textBoxes: customLayout?.textboxes || []
+    }
+  }
   return TEMPLATES[normalized] || TEMPLATES[ROUTES.clean]
 }
 
@@ -579,12 +588,41 @@ const normalizePairs = (
   const emptyPair = buildEmptyPair(slotKeys, textDefault)
   const basePairs = items
     .filter(Boolean)
-    .map((pair) => ({
-      ...emptyPair,
-      ...pair,
-      slideText:
-        typeof pair?.slideText === 'string' ? pair.slideText : textDefault,
-    }))
+    .map((pair) => {
+      const migratedPair = { ...pair }
+      Object.keys(pair).forEach((key) => {
+        if (key.startsWith('image_image_')) {
+          const newKey = key.replace('image_image_', 'image_')
+          migratedPair[newKey] = pair[key]
+        }
+        if (key.startsWith('text_text_')) {
+          const newKey = key.replace('text_text_', 'text_')
+          migratedPair[newKey] = pair[key]
+        }
+        if (key.startsWith('first_image_image_')) {
+          const newKey = key.replace('first_image_image_', 'first_image_')
+          migratedPair[newKey] = pair[key]
+        }
+        if (key.startsWith('first_text_text_')) {
+          const newKey = key.replace('first_text_text_', 'first_text_')
+          migratedPair[newKey] = pair[key]
+        }
+        if (key.startsWith('last_image_image_')) {
+          const newKey = key.replace('last_image_image_', 'last_image_')
+          migratedPair[newKey] = pair[key]
+        }
+        if (key.startsWith('last_text_text_')) {
+          const newKey = key.replace('last_text_text_', 'last_text_')
+          migratedPair[newKey] = pair[key]
+        }
+      })
+      return {
+        ...emptyPair,
+        ...migratedPair,
+        slideText:
+          typeof pair?.slideText === 'string' ? pair.slideText : textDefault,
+      }
+    })
 
   if (basePairs.length === 0) {
     return [{ ...emptyPair }]
@@ -606,15 +644,71 @@ const readFileAsDataUrl = (file) =>
     reader.readAsDataURL(file)
   })
 
-function DropSlot({ label, value, onChange, className = '', urlMode = 'inline' }) {
+const UNDO_DURATION_MS = 5000
+
+function DropSlot({ label, value, onChange, className = '', urlMode = 'inline', style }) {
   const [isDragging, setIsDragging] = useState(false)
   const [urlInput, setUrlInput] = useState('')
+  const [pendingDelete, setPendingDelete] = useState(null) // stores the image url pending deletion
+  const [undoProgress, setUndoProgress] = useState(100) // 100 → 0 countdown
   const fileInputRef = useRef(null)
+  const undoTimerRef = useRef(null)
+  const undoRafRef = useRef(null)
+
+  const clearUndoTimer = () => {
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current)
+      undoTimerRef.current = null
+    }
+    if (undoRafRef.current) {
+      cancelAnimationFrame(undoRafRef.current)
+      undoRafRef.current = null
+    }
+  }
+
+  const commitDelete = (imageUrl) => {
+    clearUndoTimer()
+    setPendingDelete(null)
+    setUndoProgress(100)
+    onChange('')
+  }
+
+  const handleDeleteClick = () => {
+    clearUndoTimer()
+    const imageToDelete = value
+    setPendingDelete(imageToDelete)
+    setUndoProgress(100)
+
+    // Animate the countdown ring
+    const startTime = performance.now()
+    const tick = (now) => {
+      const elapsed = now - startTime
+      const remaining = Math.max(0, 100 - (elapsed / UNDO_DURATION_MS) * 100)
+      setUndoProgress(remaining)
+      if (remaining > 0) {
+        undoRafRef.current = requestAnimationFrame(tick)
+      }
+    }
+    undoRafRef.current = requestAnimationFrame(tick)
+
+    undoTimerRef.current = setTimeout(() => {
+      commitDelete(imageToDelete)
+    }, UNDO_DURATION_MS)
+  }
+
+  const handleUndo = () => {
+    clearUndoTimer()
+    setPendingDelete(null)
+    setUndoProgress(100)
+    // value is already set (we never called onChange) so nothing more needed
+  }
 
   const handleFile = async (file) => {
     if (!file) {
       return
     }
+    clearUndoTimer()
+    setPendingDelete(null)
     const dataUrl = await readFileAsDataUrl(file)
     onChange(dataUrl)
   }
@@ -654,6 +748,8 @@ function DropSlot({ label, value, onChange, className = '', urlMode = 'inline' }
     if (!trimmed) {
       return
     }
+    clearUndoTimer()
+    setPendingDelete(null)
     onChange(trimmed)
     if (nextUrl === undefined) {
       setUrlInput('')
@@ -674,9 +770,22 @@ function DropSlot({ label, value, onChange, className = '', urlMode = 'inline' }
     }
   }
 
-  const slotClassName = `drop-slot${value ? ' has-image' : ''}${
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => clearUndoTimer()
+  }, [])
+
+  // Determine what image to show: if pending delete, show the pending image (greyed)
+  const displayValue = pendingDelete !== null ? pendingDelete : value
+  const isPendingDelete = pendingDelete !== null
+  const slotClassName = `drop-slot${displayValue ? ' has-image' : ''}${
     isDragging ? ' is-dragging' : ''
-  } ${className}`
+  }${isPendingDelete ? ' is-pending-delete' : ''} ${className}`
+
+  // SVG ring circumference for the countdown
+  const RING_R = 14
+  const RING_CIRC = 2 * Math.PI * RING_R
+  const ringDash = (undoProgress / 100) * RING_CIRC
 
   return (
     <div
@@ -685,23 +794,52 @@ function DropSlot({ label, value, onChange, className = '', urlMode = 'inline' }
       onDragOver={handleDragOver}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
+      style={style}
     >
       <div className="drop-slot__label">{label}</div>
-      {value ? (
+      {displayValue ? (
         <div className="drop-slot__preview-wrap">
           <img
-            className="drop-slot__preview"
-            src={value}
+            className={`drop-slot__preview${isPendingDelete ? ' is-fading' : ''}`}
+            src={displayValue}
             alt={`${label} preview`}
           />
-          <button
-            type="button"
-            className="drop-slot__delete"
-            onClick={() => onChange('')}
-            aria-label={`Remove ${label} image`}
-          >
-            Delete
-          </button>
+          {isPendingDelete ? (
+            <button
+              type="button"
+              className="drop-slot__undo"
+              onClick={handleUndo}
+              aria-label={`Undo remove ${label} image`}
+            >
+              <svg className="drop-slot__undo-ring" viewBox="0 0 36 36" aria-hidden="true">
+                <circle
+                  cx="18" cy="18" r={RING_R}
+                  fill="none"
+                  stroke="rgba(255,255,255,0.25)"
+                  strokeWidth="3"
+                />
+                <circle
+                  cx="18" cy="18" r={RING_R}
+                  fill="none"
+                  stroke="#fff"
+                  strokeWidth="3"
+                  strokeDasharray={`${ringDash} ${RING_CIRC}`}
+                  strokeLinecap="round"
+                  transform="rotate(-90 18 18)"
+                />
+              </svg>
+              <span>↩ Undo</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="drop-slot__delete"
+              onClick={handleDeleteClick}
+              aria-label={`Remove ${label} image`}
+            >
+              Delete
+            </button>
+          )}
         </div>
       ) : (
         <div className="drop-slot__placeholder">
@@ -709,38 +847,37 @@ function DropSlot({ label, value, onChange, className = '', urlMode = 'inline' }
           <span>or click Browse</span>
         </div>
       )}
-      <div className="drop-slot__actions">
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          Browse
-        </button>
-        {value && (
-          <button type="button" className="ghost" onClick={() => onChange('')}>
-            Clear
-          </button>
-        )}
-        {urlMode === 'prompt' && (
-          <button type="button" className="ghost" onClick={handleUrlPrompt}>
-            Paste URL
-          </button>
-        )}
-      </div>
-      {urlMode === 'inline' && (
-        <div className="drop-slot__url">
-          <input
-            type="text"
-            placeholder="Paste image URL"
-            value={urlInput}
-            onChange={(event) => setUrlInput(event.target.value)}
-            onKeyDown={handleUrlKeyDown}
-          />
-          <button type="button" className="ghost" onClick={handleUrlAdd}>
-            Add URL
-          </button>
-        </div>
+      {!displayValue && (
+        <>
+          <div className="drop-slot__actions">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Browse
+            </button>
+            {urlMode === 'prompt' && (
+              <button type="button" className="ghost" onClick={handleUrlPrompt}>
+                Paste URL
+              </button>
+            )}
+          </div>
+          {urlMode === 'inline' && (
+            <div className="drop-slot__url">
+              <input
+                type="text"
+                placeholder="Paste image URL"
+                value={urlInput}
+                onChange={(event) => setUrlInput(event.target.value)}
+                onKeyDown={handleUrlKeyDown}
+              />
+              <button type="button" className="ghost" onClick={handleUrlAdd}>
+                Add URL
+              </button>
+            </div>
+          )}
+        </>
       )}
       <input
         ref={fileInputRef}
@@ -761,6 +898,8 @@ function SlideCanvas({
   showText,
   textValue,
   textPlaceholder,
+  textBoxes = [],
+  onTextChange,
 }) {
   const displayText = textValue?.trim() || textPlaceholder || ''
   return (
@@ -780,16 +919,109 @@ function SlideCanvas({
           value={pair?.[slot.key]}
           onChange={(value) => onChange(slot.key, value)}
           className={slot.className}
+          style={slot.style}
           urlMode={slot.urlMode || 'inline'}
         />
       ))}
+      {textBoxes.map((box) => {
+        const textVal = pair?.[box.key] ?? ''
+        return (
+          <input
+            key={box.key}
+            type="text"
+            className="custom-slide-textbox-input"
+            value={textVal}
+            onChange={(e) => onTextChange?.(box.key, e.target.value)}
+            placeholder={box.textDefault || 'Enter text'}
+            style={{
+              position: 'absolute',
+              left: `${(box.x / 13.333) * 100}%`,
+              top: `${(box.y / 7.5) * 100}%`,
+              width: `${(box.w / 13.333) * 100}%`,
+              height: `${(box.h / 7.5) * 100}%`,
+              fontSize: `${((box.fontSize || 20) * 0.104).toFixed(3)}cqw`,
+              fontFamily: box.fontFace || 'Calibri',
+              color: box.fontColor ? `#${box.fontColor}` : '#111111',
+              fontWeight: box.bold ? 'bold' : 'normal',
+              textAlign: box.align || 'center',
+              background: 'rgba(255, 255, 255, 0.75)',
+              border: '1px dashed rgba(11, 122, 56, 0.4)',
+              borderRadius: '8px',
+              padding: '4px 8px',
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+        )
+      })}
     </div>
   )
 }
 
 function App({ data }) {
-  const template = getTemplateForPath(window.location.pathname)
   const currentRoute = normalizeRoute(window.location.pathname)
+  const [customLayout, setCustomLayout] = useState(null)
+  const [designerMode, setDesignerMode] = useState('design')
+  const [firstSlideData, setFirstSlideData] = useState({})
+  const [lastSlideData, setLastSlideData] = useState({})
+  const [isHydrated, setIsHydrated] = useState(false)
+
+  useEffect(() => {
+    const loadCustomData = async () => {
+      try {
+        const layout = await loadPairsFromDb('pptxpro:custom-master-layout')
+        const first = await loadPairsFromDb('pptxpro:custom-first-slide-data')
+        const last = await loadPairsFromDb('pptxpro:custom-last-slide-data')
+        if (layout) {
+          setCustomLayout(layout)
+          if (layout.placeholders?.length) {
+            setDesignerMode('use')
+          }
+        }
+        if (first) setFirstSlideData(first)
+        if (last) setLastSlideData(last)
+      } catch (err) {
+        console.error('Failed to load custom layout data from IndexedDB', err)
+      }
+    }
+    loadCustomData()
+  }, [])
+
+  const template = useMemo(() => {
+    if (currentRoute === ROUTES.master) {
+      return {
+        eyebrow: 'Custom Master',
+        title: 'Custom Template Report',
+        subtext: 'Upload images to automatically generate slides and compile PPTX reports.',
+        masterBgUrl: customLayout?.masterBgUrl || '',
+        firstSlideUrl: customLayout?.firstSlideUrl || '',
+        secondSlideUrl: '',
+        lastSlideUrl: customLayout?.lastSlideUrl || '',
+        fileNamePrefix: 'Custom_Report',
+        masterTitle: 'CUSTOM_MASTER',
+        slideTitle: 'Custom Report',
+        themeLabel: 'Custom template slide background',
+        importSkipFirst: 1,
+        importSkipLast: 1,
+        imageCount: customLayout?.placeholders?.length || 0,
+        slots: (customLayout?.placeholders || []).map((p) => ({
+          key: p.key,
+          label: p.label,
+          className: 'slide-slot',
+          style: {
+            left: `${(p.x / 13.333) * 100}%`,
+            top: `${(p.y / 7.5) * 100}%`,
+            width: `${(p.w / 13.333) * 100}%`,
+            height: `${(p.h / 7.5) * 100}%`,
+            position: 'absolute',
+          }
+        })),
+        textBoxes: customLayout?.textboxes || []
+      }
+    }
+    return getTemplateForPath(window.location.pathname)
+  }, [currentRoute, customLayout])
+
   const [dailyVariant, setDailyVariant] = useState('urban')
   const slotKeys = useMemo(() => {
     return template.slots?.length
@@ -802,6 +1034,11 @@ function App({ data }) {
     currentRoute,
     currentRoute === ROUTES.dailyPlot ? dailyVariant : '',
   )
+  const [prevKeyInfo, setPrevKeyInfo] = useState({ slotKeys, storageKey })
+  if (slotKeys !== prevKeyInfo.slotKeys || storageKey !== prevKeyInfo.storageKey) {
+    setPrevKeyInfo({ slotKeys, storageKey })
+    setIsHydrated(false)
+  }
   const [pairs, setPairs] = useState(() => {
     const storedPairs = loadStoredPairsSync(storageKey)
     const source = resolvePairsSource({
@@ -828,7 +1065,7 @@ function App({ data }) {
 
   useEffect(() => {
     const currentRoute = normalizeRoute(window.location.pathname)
-    if (!TEMPLATES[currentRoute]) {
+    if (!TEMPLATES[currentRoute] && currentRoute !== ROUTES.master) {
       window.history.replaceState(null, '', ROUTES.clean)
     }
   }, [])
@@ -840,6 +1077,7 @@ function App({ data }) {
   }, [currentRoute])
 
   useEffect(() => {
+    setIsHydrated(false)
     let cancelled = false
     const hydrate = async () => {
       const storedPairs = await loadStoredPairs(storageKey)
@@ -856,6 +1094,7 @@ function App({ data }) {
       }
       setPairs(normalizePairs(source, { slotKeys, requiresText, textDefault }))
       hydrationRef.current = { key: storageKey, skipSave: true }
+      setIsHydrated(true)
     }
     hydrate()
     return () => {
@@ -864,6 +1103,9 @@ function App({ data }) {
   }, [storageKey, data, slotKeys, requiresText, textDefault])
 
   useEffect(() => {
+    if (!isHydrated) {
+      return
+    }
     if (
       hydrationRef.current.key === storageKey &&
       hydrationRef.current.skipSave
@@ -872,7 +1114,7 @@ function App({ data }) {
       return
     }
     savePairsToStorage(storageKey, pairs, { slotKeys, requiresText })
-  }, [pairs, storageKey, slotKeys, requiresText])
+  }, [pairs, storageKey, slotKeys, requiresText, isHydrated])
 
   useEffect(() => {
     const index = pendingScrollIndex.current
@@ -904,13 +1146,6 @@ function App({ data }) {
     return () => window.removeEventListener('click', handleClick)
   }, [moveMenuIndex])
 
-  const isDesiltingTemplate =
-    template?.masterTitle === TEMPLATES[ROUTES.desilting]?.masterTitle
-  const applyDesiltingLabels = (nextPairs) =>
-    isDesiltingTemplate
-      ? mergeDesiltingPresetPairs(nextPairs, { slotKeys, textDefault })
-      : nextPairs
-
   const updatePair = (index, key, value) => {
     setPairs((prev) => {
       const next = prev.map((pair, pairIndex) =>
@@ -927,7 +1162,7 @@ function App({ data }) {
         }
       }
 
-      return applyDesiltingLabels(next)
+      return next
     })
   }
 
@@ -949,6 +1184,24 @@ function App({ data }) {
       }
       const [moved] = next.splice(fromIndex, 1)
       next.splice(resolvedToIndex, 0, moved)
+      return next
+    })
+  }
+
+  const swapPairImages = (index) => {
+    setPairs((prev) => {
+      const next = prev.map((pair, pairIndex) => {
+        if (pairIndex !== index) {
+          return pair
+        }
+
+        return {
+          ...pair,
+          beforeImage: pair?.afterImage || '',
+          afterImage: pair?.beforeImage || '',
+        }
+      })
+
       return next
     })
   }
@@ -1025,9 +1278,8 @@ function App({ data }) {
           skipLastSlides,
           imageCount: template.imageCount || slotKeys.length,
         })
-      const preparedPairs = applyDesiltingLabels(importedPairs)
       setPairs(
-        normalizePairs(preparedPairs, { slotKeys, requiresText, textDefault }),
+        normalizePairs(importedPairs, { slotKeys, requiresText, textDefault }),
       )
       const emptyNote = emptySlides
         ? ` ${emptySlides} slide(s) need images.`
@@ -1073,17 +1325,7 @@ function App({ data }) {
       }
       await removePairsFromDb(storageKey)
     } finally {
-      const clearedSource = resolvePairsSource({
-        storedPairs: null,
-        data: [],
-        template,
-        slotKeys,
-        textDefault,
-        requiresText,
-      })
-      setPairs(
-        normalizePairs(clearedSource, { slotKeys, requiresText, textDefault }),
-      )
+      setPairs(normalizePairs([], { slotKeys, requiresText, textDefault }))
       setImportStatus({ type: 'idle', message: '' })
       setDragIndex(null)
       setDragOverIndex(null)
@@ -1134,6 +1376,14 @@ function App({ data }) {
         textFontSize: template.textFontSize,
         textBold: template.textBold,
         textDefault: template.textDefault,
+        placeholders: currentRoute === ROUTES.master ? customLayout?.placeholders : undefined,
+        textboxes: currentRoute === ROUTES.master ? customLayout?.textboxes : undefined,
+        firstSlidePlaceholders: currentRoute === ROUTES.master ? customLayout?.firstSlidePlaceholders : undefined,
+        firstSlideTextboxes: currentRoute === ROUTES.master ? customLayout?.firstSlideTextboxes : undefined,
+        firstSlideData: currentRoute === ROUTES.master ? firstSlideData : undefined,
+        lastSlidePlaceholders: currentRoute === ROUTES.master ? customLayout?.lastSlidePlaceholders : undefined,
+        lastSlideTextboxes: currentRoute === ROUTES.master ? customLayout?.lastSlideTextboxes : undefined,
+        lastSlideData: currentRoute === ROUTES.master ? lastSlideData : undefined,
       })
     } finally {
       setIsGenerating(false)
@@ -1198,6 +1448,17 @@ function App({ data }) {
             >
               Daily Plot
             </button>
+            <button
+              type="button"
+              className={`ghost${currentRoute === ROUTES.master ? ' is-active' : ''}`}
+              onClick={() => {
+                if (currentRoute !== ROUTES.master) {
+                  window.location.pathname = ROUTES.master
+                }
+              }}
+            >
+              Master Creator
+            </button>
           </div>
           {currentRoute === ROUTES.dailyPlot && (
             <div className="app__subnav">
@@ -1217,33 +1478,61 @@ function App({ data }) {
               </button>
             </div>
           )}
-          <div className="app__badge">Slides ready: {slideCount}</div>
-          <button
-            type="button"
-            className="button button--secondary"
-            onClick={handlePptxButtonClick}
-            disabled={isImporting}
-          >
-            {isImporting ? 'Importing...' : 'Upload PPTX'}
-          </button>
-          <button type="button" className="ghost" onClick={handleClearStored}>
-            Clear Saved
-          </button>
-          <input
-            ref={pptxInputRef}
-            className="file-input"
-            type="file"
-            accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            onChange={handlePptxUpload}
-          />
-          <button
-            type="button"
-            className="button"
-            onClick={handleDownload}
-            disabled={!canDownload}
-          >
-            {isGenerating ? 'Building PPTX...' : 'Download Report'}
-          </button>
+          {currentRoute === ROUTES.master && (
+            <div className="app__subnav">
+              <button
+                type="button"
+                className={`ghost${designerMode === 'design' ? ' is-active' : ''}`}
+                onClick={() => setDesignerMode('design')}
+              >
+                Design Layout
+              </button>
+              <button
+                type="button"
+                className={`ghost${designerMode === 'use' ? ' is-active' : ''}`}
+                onClick={() => {
+                  if (customLayout?.placeholders?.length) {
+                    setDesignerMode('use')
+                  } else {
+                    alert('Please add at least one Image Placeholder to your master slide layout before switching!')
+                  }
+                }}
+              >
+                Use Template
+              </button>
+            </div>
+          )}
+          {!(currentRoute === ROUTES.master && designerMode === 'design') && (
+            <>
+              <div className="app__badge">Slides ready: {slideCount}</div>
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={handlePptxButtonClick}
+                disabled={isImporting}
+              >
+                {isImporting ? 'Importing...' : 'Upload PPTX'}
+              </button>
+              <button type="button" className="ghost" onClick={handleClearStored}>
+                Clear Saved
+              </button>
+              <input
+                ref={pptxInputRef}
+                className="file-input"
+                type="file"
+                accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                onChange={handlePptxUpload}
+              />
+              <button
+                type="button"
+                className="button"
+                onClick={handleDownload}
+                disabled={!canDownload}
+              >
+                {isGenerating ? 'Building PPTX...' : 'Download Report'}
+              </button>
+            </>
+          )}
         </div>
       </header>
 
@@ -1253,21 +1542,78 @@ function App({ data }) {
         </p>
       )}
 
-      <section className="card card--theme">
-        <div>
-          <p className="label">{template.themeLabel}</p>
-          <p className="value">
-            Using background image: <span>{template.masterBgUrl}</span>
-          </p>
-        </div>
-        <p className="value">
-          Export your master slide from the PPTX as PNG and place it in the
-          public folder with this name. The image should include the title and
-          footer styling.
-        </p>
-      </section>
+      {currentRoute === ROUTES.master && designerMode === 'design' ? (
+        <MasterDesigner
+          customLayout={customLayout}
+          onSave={async (layout) => {
+            try {
+              await savePairsToDb('pptxpro:custom-master-layout', layout)
+              setCustomLayout(layout)
+              alert('Layout saved successfully! Switch to "Use Template" mode to use it.')
+              setDesignerMode('use')
+            } catch (err) {
+              alert('Failed to save layout: ' + err.message)
+            }
+          }}
+        />
+      ) : (
+        <>
+          <section className="card card--theme">
+            <div>
+              <p className="label">{template.themeLabel}</p>
+              <p className="value">
+                Using background image: <span>{template.masterBgUrl ? (template.masterBgUrl.startsWith('data:') ? 'Custom background data' : template.masterBgUrl) : 'None'}</span>
+              </p>
+            </div>
+            {currentRoute !== ROUTES.master && (
+              <p className="value">
+                Export your master slide from the PPTX as PNG and place it in the
+                public folder with this name. The image should include the title and
+                footer styling.
+              </p>
+            )}
+          </section>
 
       <section className="pairs">
+        {currentRoute === ROUTES.master && ((customLayout?.firstSlidePlaceholders?.length > 0) || (customLayout?.firstSlideTextboxes?.length > 0)) && (
+          <article className="pair" style={{ border: '2px solid rgba(11, 122, 56, 0.4)' }}>
+            <div className="pair__header">
+              <p className="label" style={{ fontWeight: 'bold', color: '#0b7a38' }}>Title Slide (First Slide)</p>
+              <span className="pair__status is-complete">Cover Slide</span>
+            </div>
+            <SlideCanvas
+              pair={firstSlideData}
+              slots={(customLayout?.firstSlidePlaceholders || []).map((p) => ({
+                key: p.key,
+                label: p.label,
+                className: 'slide-slot',
+                style: {
+                  left: `${(p.x / 13.333) * 100}%`,
+                  top: `${(p.y / 7.5) * 100}%`,
+                  width: `${(p.w / 13.333) * 100}%`,
+                  height: `${(p.h / 7.5) * 100}%`,
+                  position: 'absolute',
+                }
+              }))}
+              onChange={(key, value) => {
+                setFirstSlideData((prev) => {
+                  const next = { ...prev, [key]: value }
+                  savePairsToDb('pptxpro:custom-first-slide-data', next)
+                  return next
+                })
+              }}
+              backgroundUrl={customLayout?.firstSlideUrl}
+              textBoxes={customLayout?.firstSlideTextboxes || []}
+              onTextChange={(key, value) => {
+                setFirstSlideData((prev) => {
+                  const next = { ...prev, [key]: value }
+                  savePairsToDb('pptxpro:custom-first-slide-data', next)
+                  return next
+                })
+              }}
+            />
+          </article>
+        )}
         {pairs.map((pair, index) => {
           const canDrag = hasPairContent(pair, { slotKeys, requiresText })
           const isDragging = dragIndex === index
@@ -1307,6 +1653,15 @@ function App({ data }) {
                       </span>
                     )
                   })()}
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => swapPairImages(index)}
+                    disabled={!slotKeys.some((key) => pair?.[key])}
+                    title="Swap before and after images"
+                  >
+                    Swap
+                  </button>
                   <div
                     className="pair__move"
                     ref={isMenuOpen ? moveMenuRef : null}
@@ -1392,11 +1747,54 @@ function App({ data }) {
                 showText={Boolean(template.textBox)}
                 textValue={pair.slideText || ''}
                 textPlaceholder={template.textDefault || ''}
+                textBoxes={template.textBoxes || []}
+                onTextChange={(key, value) => updatePair(index, key, value)}
               />
             </article>
           )
         })}
+        {currentRoute === ROUTES.master && ((customLayout?.lastSlidePlaceholders?.length > 0) || (customLayout?.lastSlideTextboxes?.length > 0)) && (
+          <article className="pair" style={{ border: '2px solid rgba(11, 122, 56, 0.4)' }}>
+            <div className="pair__header">
+              <p className="label" style={{ fontWeight: 'bold', color: '#0b7a38' }}>Closing Slide (Last Slide)</p>
+              <span className="pair__status is-complete">End Slide</span>
+            </div>
+            <SlideCanvas
+              pair={lastSlideData}
+              slots={(customLayout?.lastSlidePlaceholders || []).map((p) => ({
+                key: p.key,
+                label: p.label,
+                className: 'slide-slot',
+                style: {
+                  left: `${(p.x / 13.333) * 100}%`,
+                  top: `${(p.y / 7.5) * 100}%`,
+                  width: `${(p.w / 13.333) * 100}%`,
+                  height: `${(p.h / 7.5) * 100}%`,
+                  position: 'absolute',
+                }
+              }))}
+              onChange={(key, value) => {
+                setLastSlideData((prev) => {
+                  const next = { ...prev, [key]: value }
+                  savePairsToDb('pptxpro:custom-last-slide-data', next)
+                  return next
+                })
+              }}
+              backgroundUrl={customLayout?.lastSlideUrl}
+              textBoxes={customLayout?.lastSlideTextboxes || []}
+              onTextChange={(key, value) => {
+                setLastSlideData((prev) => {
+                  const next = { ...prev, [key]: value }
+                  savePairsToDb('pptxpro:custom-last-slide-data', next)
+                  return next
+                })
+              }}
+            />
+          </article>
+        )}
       </section>
+      </>
+      )}
     </main>
   )
 }
