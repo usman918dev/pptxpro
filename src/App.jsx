@@ -295,7 +295,7 @@ const TEMPLATES = {
     title: 'Plots Cleaning-Activity',
     subtext:
       'Drop a Before and After image. A new row appears automatically and the page scrolls to it.',
-    masterBgUrl: '/master-slide.jpeg',
+    masterBgUrl: '/master-slide.png',
     firstSlideUrl: '/first-slide.png',
     secondSlideUrl: '',
     lastSlideUrl: '/last-slide.png',
