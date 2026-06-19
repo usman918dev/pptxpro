@@ -4,6 +4,9 @@ const DEFAULT_SLIDE_SIZE = { cx: 12192000, cy: 6858000 }
 const MAX_BACKGROUND_RATIO = 0.9
 const MIN_IMAGE_RATIO = 0.05
 
+// EMU (English Metric Units) per inch in OOXML
+const EMU_PER_INCH = 914400
+
 const parseXml = (xmlText) => {
   const parser = new DOMParser()
   const doc = parser.parseFromString(xmlText, 'application/xml')
@@ -156,6 +159,100 @@ const getPicturesFromSlide = (slideDoc, relMap) => {
     .filter(Boolean)
 }
 
+/**
+ * Extract text shapes from a slide XML document.
+ * Returns an array of objects: { text, xInch, yInch, wInch, hInch }
+ * Only shapes that contain actual non-empty text are returned.
+ * Background-covering shapes and shapes without text content are skipped.
+ */
+const getTextShapesFromSlide = (slideDoc, slideSize) => {
+  // p:sp = shape (text box, title, content placeholder, etc.)
+  const spNodes = Array.from(
+    slideDoc.getElementsByTagName('p:sp').length
+      ? slideDoc.getElementsByTagName('p:sp')
+      : slideDoc.getElementsByTagName('sp'),
+  )
+
+  const slideAreaEmu = slideSize.cx * slideSize.cy
+  const maxBackgroundAreaEmu = slideAreaEmu * MAX_BACKGROUND_RATIO
+
+  const results = []
+
+  for (const sp of spNodes) {
+    // Get transform to find position/size
+    const xfrm = getFirstTag(sp, ['a:xfrm', 'xfrm'])
+    const off = xfrm ? getFirstTag(xfrm, ['a:off', 'off']) : null
+    const ext = xfrm ? getFirstTag(xfrm, ['a:ext', 'ext']) : null
+
+    const xEmu = Number(off?.getAttribute('x') || 0)
+    const yEmu = Number(off?.getAttribute('y') || 0)
+    const cxEmu = Number(ext?.getAttribute('cx') || 0)
+    const cyEmu = Number(ext?.getAttribute('cy') || 0)
+    const areaEmu = cxEmu * cyEmu
+
+    // Skip full-slide background shapes
+    if (areaEmu >= maxBackgroundAreaEmu) {
+      continue
+    }
+
+    // Collect all text runs (a:r > a:t) within this shape
+    const tNodes = Array.from(sp.getElementsByTagName('a:t').length
+      ? sp.getElementsByTagName('a:t')
+      : sp.getElementsByTagName('t'))
+
+    const text = tNodes
+      .map((t) => t.textContent || '')
+      .join('')
+      .trim()
+
+    if (!text) {
+      continue
+    }
+
+    results.push({
+      text,
+      xInch: xEmu / EMU_PER_INCH,
+      yInch: yEmu / EMU_PER_INCH,
+      wInch: cxEmu / EMU_PER_INCH,
+      hInch: cyEmu / EMU_PER_INCH,
+    })
+  }
+
+  return results
+}
+
+/**
+ * Match extracted text shapes to master textbox placeholders by index order.
+ * Text shapes are sorted by reading order (top→bottom, left→right).
+ * The N-th text shape maps to the N-th textbox key.
+ * Textbox keys beyond the number of extracted text shapes are left empty ('').
+ *
+ * @param {Array} textShapes  - from getTextShapesFromSlide(): [{ text, xInch, yInch, ... }]
+ * @param {Array} textboxDefs - master textbox definitions: [{ key, x, y, w, h }]
+ * @returns {Object} - { [key]: text }
+ */
+const matchTextToBoxes = (textShapes, textboxDefs) => {
+  if (!textboxDefs.length) return {}
+
+  // Sort text shapes by reading order: top-to-bottom first, then left-to-right
+  // Use a row-tolerance of 0.5 inch so shapes on roughly the same line group together
+  const ROW_TOLERANCE = 0.5
+  const sorted = [...textShapes].sort((a, b) => {
+    const rowDiff = a.yInch - b.yInch
+    if (Math.abs(rowDiff) > ROW_TOLERANCE) return rowDiff
+    return a.xInch - b.xInch
+  })
+
+  const result = {}
+  for (let i = 0; i < textboxDefs.length; i++) {
+    const key = textboxDefs[i].key
+    // If a text shape exists at this index, use it; otherwise leave empty
+    result[key] = sorted[i]?.text ?? ''
+  }
+  return result
+}
+
+
 const pickSlideImages = async (
   zip,
   pictures,
@@ -211,7 +308,12 @@ const pickSlideImages = async (
 
 export const importPptxSlides = async (
   file,
-  { skipFirstSlides = 1, skipLastSlides = 1, imageCount = 2 } = {},
+  {
+    skipFirstSlides = 1,
+    skipLastSlides = 1,
+    imageCount = 2,
+    textboxDefs = [],   // master textbox definitions: [{ key, x, y, w, h }]
+  } = {},
 ) => {
   if (!file) {
     return { pairs: [], totalSlides: 0, importedSlides: 0, emptySlides: 0 }
@@ -256,6 +358,13 @@ export const importPptxSlides = async (
       imageCache,
       imageCount,
     )
+
+    // Extract text shapes and match them to master textbox placeholders
+    if (textboxDefs.length > 0) {
+      const textShapes = getTextShapesFromSlide(slideDoc, slideSize)
+      const extractedTexts = matchTextToBoxes(textShapes, textboxDefs)
+      Object.assign(pair, extractedTexts)
+    }
 
     if (!pair.beforeImage && !pair.afterImage && !pair.middleImage) {
       emptySlides += 1

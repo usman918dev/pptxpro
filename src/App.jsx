@@ -29,6 +29,11 @@ const DB_NAME = 'pptxpro-slides'
 const DB_STORE = 'pairs'
 const DB_VERSION = 1
 
+// Master preset DB keys
+const MASTER_PRESETS_KEY = 'pptxpro:master-presets'
+const MASTER_ACTIVE_KEY = 'pptxpro:master-active-preset-id'
+const MASTER_LEGACY_KEY = 'pptxpro:custom-master-layout'
+
 const buildStorageKey = (route, variant = '') => {
   const normalizedRoute = normalizeRoute(route)
   const resolvedVariant =
@@ -411,51 +416,74 @@ const TEMPLATES = {
   },
 }
 
-const loadCustomLayoutSync = () => {
+// ── Master Preset helpers ────────────────────────────────────────────────────
+
+const loadMasterPresets = async () => {
   try {
-    const raw = window.localStorage.getItem('pptxpro:custom-master-layout')
-    return raw ? JSON.parse(raw) : null
+    const data = await loadPairsFromDb(MASTER_PRESETS_KEY)
+    return Array.isArray(data) ? data : []
+  } catch {
+    return []
+  }
+}
+
+const saveMasterPresets = async (presets) => {
+  try {
+    await savePairsToDb(MASTER_PRESETS_KEY, presets)
+  } catch {
+    // Ignore
+  }
+}
+
+const loadActivePresetId = async () => {
+  try {
+    const id = await loadPairsFromDb(MASTER_ACTIVE_KEY)
+    return typeof id === 'string' ? id : null
   } catch {
     return null
   }
 }
 
+const saveActivePresetId = async (id) => {
+  try {
+    if (id) {
+      await savePairsToDb(MASTER_ACTIVE_KEY, id)
+    } else {
+      await removePairsFromDb(MASTER_ACTIVE_KEY)
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+// Migrate old single layout to preset system (runs once)
+const migrateLegacyLayout = async (presets) => {
+  try {
+    const legacy = await loadPairsFromDb(MASTER_LEGACY_KEY)
+    if (legacy && typeof legacy === 'object') {
+      const already = presets.some((p) => p._migrated)
+      if (!already) {
+        const newPreset = {
+          id: `preset_migrated_${Date.now()}`,
+          name: 'Default',
+          createdAt: Date.now(),
+          _migrated: true,
+          layout: legacy,
+        }
+        return [newPreset, ...presets]
+      }
+    }
+  } catch {
+    // Ignore
+  }
+  return null // no migration needed
+}
+
 const getTemplateForPath = (path) => {
   const normalized = normalizeRoute(path)
-  if (normalized === ROUTES.master) {
-    const customLayout = loadCustomLayoutSync()
-    return {
-      eyebrow: 'Custom Master',
-      title: 'Custom Template Report',
-      subtext: 'Drop images into your custom placeholders. Slides are created automatically.',
-      masterBgUrl: customLayout?.masterBgUrl || '',
-      firstSlideUrl: customLayout?.firstSlideUrl || '',
-      secondSlideUrl: '',
-      lastSlideUrl: customLayout?.lastSlideUrl || '',
-      fileNamePrefix: 'Custom_Report',
-      masterTitle: 'CUSTOM_MASTER',
-      slideTitle: 'Custom Report',
-      themeLabel: 'Custom master slide background',
-      importSkipFirst: 1,
-      importSkipLast: 1,
-      imageCount: customLayout?.placeholders?.length || 0,
-      slots: (customLayout?.placeholders || []).map((p) => ({
-        key: p.key,
-        label: p.label,
-        className: 'slide-slot',
-        style: {
-          left: `${(p.x / 13.333) * 100}%`,
-          top: `${(p.y / 7.5) * 100}%`,
-          width: `${(p.w / 13.333) * 100}%`,
-          height: `${(p.h / 7.5) * 100}%`,
-          position: 'absolute',
-        }
-      })),
-      textBoxes: customLayout?.textboxes || []
-    }
-  }
   return TEMPLATES[normalized] || TEMPLATES[ROUTES.clean]
 }
+
 
 const buildEmptyPair = (slotKeys, textDefault = '') => {
   const emptyPair = {
@@ -960,7 +988,12 @@ function SlideCanvas({
 
 function App({ data }) {
   const currentRoute = normalizeRoute(window.location.pathname)
-  const [customLayout, setCustomLayout] = useState(null)
+  // ── Preset management state ─────────────────────────────────────────────
+  const [masterPresets, setMasterPresets] = useState([])
+  const [activePresetId, setActivePresetId] = useState(null)
+  // Derive customLayout from active preset
+  const customLayout = masterPresets.find((p) => p.id === activePresetId)?.layout || null
+
   const [designerMode, setDesignerMode] = useState('design')
   const [firstSlideData, setFirstSlideData] = useState({})
   const [lastSlideData, setLastSlideData] = useState({})
@@ -969,23 +1002,95 @@ function App({ data }) {
   useEffect(() => {
     const loadCustomData = async () => {
       try {
-        const layout = await loadPairsFromDb('pptxpro:custom-master-layout')
-        const first = await loadPairsFromDb('pptxpro:custom-first-slide-data')
-        const last = await loadPairsFromDb('pptxpro:custom-last-slide-data')
-        if (layout) {
-          setCustomLayout(layout)
-          if (layout.placeholders?.length) {
-            setDesignerMode('use')
+        // Load presets
+        let presets = await loadMasterPresets()
+
+        // Migrate old single layout key if needed
+        if (presets.length === 0) {
+          const migrated = await migrateLegacyLayout(presets)
+          if (migrated) {
+            presets = migrated
+            await saveMasterPresets(presets)
+          }
+        } else {
+          const migrated = await migrateLegacyLayout(presets)
+          if (migrated) {
+            presets = migrated
+            await saveMasterPresets(presets)
           }
         }
+
+        setMasterPresets(presets)
+
+        // Load active preset id
+        let activeId = await loadActivePresetId()
+        if (!activeId && presets.length > 0) {
+          activeId = presets[0].id
+          await saveActivePresetId(activeId)
+        }
+        setActivePresetId(activeId)
+
+        // Switch to Use mode if a preset has placeholders
+        const active = presets.find((p) => p.id === activeId)
+        if (active?.layout?.placeholders?.length) {
+          setDesignerMode('use')
+        }
+
+        // Load first/last slide data
+        const first = await loadPairsFromDb('pptxpro:custom-first-slide-data')
+        const last = await loadPairsFromDb('pptxpro:custom-last-slide-data')
         if (first) setFirstSlideData(first)
         if (last) setLastSlideData(last)
       } catch (err) {
-        console.error('Failed to load custom layout data from IndexedDB', err)
+        console.error('Failed to load master preset data from IndexedDB', err)
       }
     }
     loadCustomData()
   }, [])
+
+  // ── Preset action handlers ───────────────────────────────────────────────
+  const handleSaveNewPreset = async (name, layout) => {
+    const newPreset = {
+      id: `preset_${Date.now()}`,
+      name,
+      createdAt: Date.now(),
+      layout,
+    }
+    const updated = [...masterPresets, newPreset]
+    setMasterPresets(updated)
+    setActivePresetId(newPreset.id)
+    await saveMasterPresets(updated)
+    await saveActivePresetId(newPreset.id)
+    setDesignerMode('design')
+    alert(`Preset "${name}" saved! Switch to "Use Template" to use it.`)
+  }
+
+  const handleLoadPreset = async (id) => {
+    setActivePresetId(id)
+    await saveActivePresetId(id)
+    // Clear slide data so user starts fresh when switching presets
+    setFirstSlideData({})
+    setLastSlideData({})
+    await removePairsFromDb('pptxpro:custom-first-slide-data')
+    await removePairsFromDb('pptxpro:custom-last-slide-data')
+  }
+
+  const handleDeletePreset = async (id) => {
+    const updated = masterPresets.filter((p) => p.id !== id)
+    setMasterPresets(updated)
+    await saveMasterPresets(updated)
+    if (activePresetId === id) {
+      const newActive = updated[0]?.id || null
+      setActivePresetId(newActive)
+      await saveActivePresetId(newActive)
+    }
+  }
+
+  const handleRenamePreset = async (id, newName) => {
+    const updated = masterPresets.map((p) => p.id === id ? { ...p, name: newName } : p)
+    setMasterPresets(updated)
+    await saveMasterPresets(updated)
+  }
 
   const template = useMemo(() => {
     if (currentRoute === ROUTES.master) {
@@ -997,7 +1102,7 @@ function App({ data }) {
         firstSlideUrl: customLayout?.firstSlideUrl || '',
         secondSlideUrl: '',
         lastSlideUrl: customLayout?.lastSlideUrl || '',
-        fileNamePrefix: 'Custom_Report',
+        fileNamePrefix: masterPresets.find((p) => p.id === activePresetId)?.name || 'Custom_Report',
         masterTitle: 'CUSTOM_MASTER',
         slideTitle: 'Custom Report',
         themeLabel: 'Custom template slide background',
@@ -1020,7 +1125,7 @@ function App({ data }) {
       }
     }
     return getTemplateForPath(window.location.pathname)
-  }, [currentRoute, customLayout])
+  }, [currentRoute, customLayout, masterPresets, activePresetId])
 
   const [dailyVariant, setDailyVariant] = useState('urban')
   const slotKeys = useMemo(() => {
@@ -1277,7 +1382,10 @@ function App({ data }) {
           skipFirstSlides,
           skipLastSlides,
           imageCount: template.imageCount || slotKeys.length,
+          // On the master route, pass textbox definitions so text is auto-extracted
+          textboxDefs: currentRoute === ROUTES.master ? (customLayout?.textboxes || []) : [],
         })
+
       setPairs(
         normalizePairs(importedPairs, { slotKeys, requiresText, textDefault }),
       )
@@ -1546,15 +1654,26 @@ function App({ data }) {
         <MasterDesigner
           customLayout={customLayout}
           onSave={async (layout) => {
-            try {
-              await savePairsToDb('pptxpro:custom-master-layout', layout)
-              setCustomLayout(layout)
-              alert('Layout saved successfully! Switch to "Use Template" mode to use it.')
+            // Overwrite active preset's layout
+            if (activePresetId) {
+              const updated = masterPresets.map((p) =>
+                p.id === activePresetId ? { ...p, layout } : p
+              )
+              setMasterPresets(updated)
+              await saveMasterPresets(updated)
+              alert('Active preset updated! Switch to "Use Template" to use it.')
               setDesignerMode('use')
-            } catch (err) {
-              alert('Failed to save layout: ' + err.message)
+            } else {
+              // No active preset — save as new unnamed preset
+              await handleSaveNewPreset('Default', layout)
             }
           }}
+          presets={masterPresets}
+          activePresetId={activePresetId}
+          onSavePreset={handleSaveNewPreset}
+          onLoadPreset={handleLoadPreset}
+          onDeletePreset={handleDeletePreset}
+          onRenamePreset={handleRenamePreset}
         />
       ) : (
         <>
