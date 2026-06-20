@@ -1036,11 +1036,13 @@ function App({ data }) {
           setDesignerMode('use')
         }
 
-        // Load first/last slide data
-        const first = await loadPairsFromDb('pptxpro:custom-first-slide-data')
-        const last = await loadPairsFromDb('pptxpro:custom-last-slide-data')
-        if (first) setFirstSlideData(first)
-        if (last) setLastSlideData(last)
+        // Load first/last slide data (scoped to the active preset)
+        if (activeId) {
+          const first = await loadPairsFromDb(`pptxpro:custom-first-slide-data:${activeId}`)
+          const last = await loadPairsFromDb(`pptxpro:custom-last-slide-data:${activeId}`)
+          if (first) setFirstSlideData(first)
+          if (last) setLastSlideData(last)
+        }
       } catch (err) {
         console.error('Failed to load master preset data from IndexedDB', err)
       }
@@ -1068,11 +1070,12 @@ function App({ data }) {
   const handleLoadPreset = async (id) => {
     setActivePresetId(id)
     await saveActivePresetId(id)
-    // Clear slide data so user starts fresh when switching presets
-    setFirstSlideData({})
-    setLastSlideData({})
-    await removePairsFromDb('pptxpro:custom-first-slide-data')
-    await removePairsFromDb('pptxpro:custom-last-slide-data')
+    // Load slide data that belongs to this specific preset (don't clear it —
+    // each preset stores its own data under a scoped key)
+    const first = await loadPairsFromDb(`pptxpro:custom-first-slide-data:${id}`)
+    const last = await loadPairsFromDb(`pptxpro:custom-last-slide-data:${id}`)
+    setFirstSlideData(first || {})
+    setLastSlideData(last || {})
   }
 
   const handleDeletePreset = async (id) => {
@@ -1084,6 +1087,107 @@ function App({ data }) {
       setActivePresetId(newActive)
       await saveActivePresetId(newActive)
     }
+  }
+
+  // ── Export / Import handlers ────────────────────────────────────────────
+  const handleExportPreset = (id) => {
+    const preset = masterPresets.find((p) => p.id === id)
+    if (!preset) return
+    const blob = new Blob([JSON.stringify([preset], null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${preset.name.replace(/[^a-z0-9_-]/gi, '_')}.pptxpro-template.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleExportAllPresets = () => {
+    if (masterPresets.length === 0) {
+      alert('No templates to export.')
+      return
+    }
+    const blob = new Blob([JSON.stringify(masterPresets, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'all-templates.pptxpro-template.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImportPresetsFile = (file) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = async (e) => {
+      try {
+        const text = e.target.result
+        let parsed
+        try {
+          parsed = JSON.parse(text)
+        } catch {
+          alert('❌ Invalid file — could not parse JSON. Make sure you are importing a valid .pptxpro-template.json file.')
+          return
+        }
+
+        // Support both a single preset object and an array of presets
+        const incoming = Array.isArray(parsed) ? parsed : (parsed && parsed.id ? [parsed] : [])
+
+        if (incoming.length === 0) {
+          alert('❌ No templates found in the file.')
+          return
+        }
+
+        // Relaxed validation — only require that layout exists
+        const valid = incoming.filter(
+          (p) => p && typeof p === 'object' && p.layout
+        )
+
+        if (valid.length === 0) {
+          alert('❌ The file does not contain valid template data. Each template must have a "layout" field.')
+          return
+        }
+
+        // Ensure every imported preset has a valid id
+        const sanitized = valid.map((p) => ({
+          ...p,
+          id: typeof p.id === 'string' && p.id ? p.id : `preset_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+          name: typeof p.name === 'string' && p.name ? p.name : 'Imported Template',
+          createdAt: p.createdAt || Date.now(),
+        }))
+
+        // Merge: re-id any collisions with existing presets
+        const existingIds = new Set(masterPresets.map((p) => p.id))
+        const toAdd = sanitized.map((p) => {
+          if (existingIds.has(p.id)) {
+            return {
+              ...p,
+              id: `preset_imported_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+              name: `${p.name} (imported)`,
+            }
+          }
+          return p
+        })
+
+        const updated = [...masterPresets, ...toAdd]
+        setMasterPresets(updated)
+        await saveMasterPresets(updated)
+
+        // Auto-load the first imported preset if none is active
+        if (!activePresetId && toAdd.length > 0) {
+          setActivePresetId(toAdd[0].id)
+          await saveActivePresetId(toAdd[0].id)
+        }
+
+        alert(`✅ Imported ${toAdd.length} template${toAdd.length !== 1 ? 's' : ''} successfully! ${toAdd.length === 1 ? `"${toAdd[0].name}"` : ''} is now in your library.`)
+      } catch (err) {
+        alert(`❌ Import failed: ${err.message}`)
+      }
+    }
+    reader.onerror = () => {
+      alert('❌ Could not read the file. Please try again.')
+    }
+    reader.readAsText(file)
   }
 
   const handleRenamePreset = async (id, newName) => {
@@ -1135,10 +1239,15 @@ function App({ data }) {
   }, [template])
   const requiresText = Boolean(template.textBox)
   const textDefault = template.textDefault || ''
-  const storageKey = buildStorageKey(
-    currentRoute,
-    currentRoute === ROUTES.dailyPlot ? dailyVariant : '',
-  )
+  // On the master route each preset gets its own storage bucket so images
+  // don't bleed between templates.
+  const storageKey =
+    currentRoute === ROUTES.master && activePresetId
+      ? `${STORAGE_PREFIX}:${currentRoute}:${activePresetId}`
+      : buildStorageKey(
+          currentRoute,
+          currentRoute === ROUTES.dailyPlot ? dailyVariant : '',
+        )
   const [prevKeyInfo, setPrevKeyInfo] = useState({ slotKeys, storageKey })
   if (slotKeys !== prevKeyInfo.slotKeys || storageKey !== prevKeyInfo.storageKey) {
     setPrevKeyInfo({ slotKeys, storageKey })
@@ -1674,6 +1783,9 @@ function App({ data }) {
           onLoadPreset={handleLoadPreset}
           onDeletePreset={handleDeletePreset}
           onRenamePreset={handleRenamePreset}
+          onExportPreset={handleExportPreset}
+          onExportAll={handleExportAllPresets}
+          onImportPresets={handleImportPresetsFile}
         />
       ) : (
         <>
@@ -1717,7 +1829,7 @@ function App({ data }) {
               onChange={(key, value) => {
                 setFirstSlideData((prev) => {
                   const next = { ...prev, [key]: value }
-                  savePairsToDb('pptxpro:custom-first-slide-data', next)
+                  if (activePresetId) savePairsToDb(`pptxpro:custom-first-slide-data:${activePresetId}`, next)
                   return next
                 })
               }}
@@ -1726,7 +1838,7 @@ function App({ data }) {
               onTextChange={(key, value) => {
                 setFirstSlideData((prev) => {
                   const next = { ...prev, [key]: value }
-                  savePairsToDb('pptxpro:custom-first-slide-data', next)
+                  if (activePresetId) savePairsToDb(`pptxpro:custom-first-slide-data:${activePresetId}`, next)
                   return next
                 })
               }}
@@ -1895,7 +2007,7 @@ function App({ data }) {
               onChange={(key, value) => {
                 setLastSlideData((prev) => {
                   const next = { ...prev, [key]: value }
-                  savePairsToDb('pptxpro:custom-last-slide-data', next)
+                  if (activePresetId) savePairsToDb(`pptxpro:custom-last-slide-data:${activePresetId}`, next)
                   return next
                 })
               }}
@@ -1904,7 +2016,7 @@ function App({ data }) {
               onTextChange={(key, value) => {
                 setLastSlideData((prev) => {
                   const next = { ...prev, [key]: value }
-                  savePairsToDb('pptxpro:custom-last-slide-data', next)
+                  if (activePresetId) savePairsToDb(`pptxpro:custom-last-slide-data:${activePresetId}`, next)
                   return next
                 })
               }}

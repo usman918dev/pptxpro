@@ -2,10 +2,11 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 
 // ─── Preset Library Panel ────────────────────────────────────────────────────
 
-function PresetLibrary({ presets, activePresetId, onLoad, onDelete, onRename, onSaveNew }) {
+function PresetLibrary({ presets, activePresetId, onLoad, onDelete, onRename, onSaveNew, onExportPreset, onExportAll, onImportPresets }) {
   const [newName, setNewName] = useState('')
   const [renamingId, setRenamingId] = useState(null)
   const [renameValue, setRenameValue] = useState('')
+  const importInputRef = useRef(null)
 
   const handleSaveNew = () => {
     const name = newName.trim() || `Preset ${presets.length + 1}`
@@ -55,6 +56,44 @@ function PresetLibrary({ presets, activePresetId, onLoad, onDelete, onRename, on
             💾 Save as New
           </button>
         </div>
+      </div>
+
+      {/* ── Export All / Import row ── */}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' }}>
+        <button
+          type="button"
+          className="ghost"
+          style={{ padding: '6px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}
+          onClick={onExportAll}
+          title="Download all templates as a JSON file"
+        >
+          📤 Export All Templates
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          style={{ padding: '6px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}
+          onClick={() => importInputRef.current?.click()}
+          title="Import templates from a JSON file"
+        >
+          📥 Import Templates
+        </button>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (file) onImportPresets(file)
+            e.target.value = ''
+          }}
+        />
+        {presets.length > 0 && (
+          <span style={{ fontSize: '11px', color: 'var(--muted)', marginLeft: 'auto' }}>
+            {presets.length} template{presets.length !== 1 ? 's' : ''} saved
+          </span>
+        )}
       </div>
 
       {presets.length === 0 ? (
@@ -121,6 +160,15 @@ function PresetLibrary({ presets, activePresetId, onLoad, onDelete, onRename, on
                     </button>
                     <button
                       type="button"
+                      className="ghost"
+                      style={{ padding: '4px 10px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}
+                      onClick={() => onExportPreset(preset.id)}
+                      title="Download this template as a JSON file"
+                    >
+                      📥 Download
+                    </button>
+                    <button
+                      type="button"
                       style={{
                         padding: '4px 10px',
                         fontSize: '10px',
@@ -160,6 +208,9 @@ export function MasterDesigner({
   onLoadPreset,
   onDeletePreset,
   onRenamePreset,
+  onExportPreset,
+  onExportAll,
+  onImportPresets,
 }) {
   const [firstSlideUrl, setFirstSlideUrl] = useState(customLayout?.firstSlideUrl || '')
   const [lastSlideUrl, setLastSlideUrl] = useState(customLayout?.lastSlideUrl || '')
@@ -451,6 +502,9 @@ export function MasterDesigner({
         onLoad={onLoadPreset}
         onDelete={onDeletePreset}
         onRename={onRenamePreset}
+        onExportPreset={onExportPreset}
+        onExportAll={onExportAll}
+        onImportPresets={onImportPresets}
         onSaveNew={(name) => {
           // Collect current canvas layout and save as new preset
           const sortAndMapPlaceholders = (list, prefix) =>
