@@ -380,3 +380,65 @@ export const importPptxSlides = async (
     emptySlides,
   }
 }
+
+/**
+ * Extract EVERY image from every slide in the PPTX.
+ * No slide skipping, no per-slide image limit.
+ * Returns an array of extracted image objects sorted by slide order,
+ * then by position (left-to-right within each slide).
+ *
+ * Each item: { id, slideIndex, slideNumber, imageIndex, dataUrl }
+ */
+export const extractAllImages = async (file) => {
+  if (!file) return []
+
+  const arrayBuffer = await file.arrayBuffer()
+  const zip = await JSZip.loadAsync(arrayBuffer)
+  const slidePaths = getSlidePaths(zip)
+  const slideSize = await getSlideSize(zip)
+  const imageCache = new Map()
+
+  const results = []
+
+  for (let si = 0; si < slidePaths.length; si++) {
+    const slidePath = slidePaths[si]
+    const slideFile = zip.file(slidePath)
+    if (!slideFile) continue
+
+    const slideDoc = parseXml(await slideFile.async('text'))
+    const relMap = await getSlideRelations(zip, getSlideRelsPath(slidePath))
+    const pictures = getPicturesFromSlide(slideDoc, relMap)
+
+    if (!pictures.length) continue
+
+    const slideArea = slideSize.cx * slideSize.cy
+    const maxBackgroundArea = slideArea * MAX_BACKGROUND_RATIO
+
+    // Filter out full-slide background images
+    const usable = pictures.filter((pic) => pic.area < maxBackgroundArea)
+    const toExtract = usable.length > 0 ? usable : pictures
+
+    // Sort left-to-right, top-to-bottom by position
+    toExtract.sort((a, b) => {
+      const rowTolerance = slideSize.cy * 0.1
+      const rowDiff = a.y - b.y
+      if (Math.abs(rowDiff) > rowTolerance) return rowDiff
+      return a.x - b.x
+    })
+
+    for (let ii = 0; ii < toExtract.length; ii++) {
+      const pic = toExtract[ii]
+      const dataUrl = await getImageDataUrl(zip, pic.target, imageCache)
+      if (!dataUrl) continue
+      results.push({
+        id: `slide${si + 1}_img${ii + 1}`,
+        slideIndex: si,
+        slideNumber: si + 1,
+        imageIndex: ii,
+        dataUrl,
+      })
+    }
+  }
+
+  return results
+}

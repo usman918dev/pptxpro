@@ -3,6 +3,7 @@ import './App.css'
 import { generateReport } from './report/generateReport'
 import { importPptxSlides } from './report/importPptx'
 import { MasterDesigner } from './MasterDesigner'
+import { ImageExtractor } from './ImageExtractor'
 
 const EMPTY_PAIR = {
   beforeImage: '',
@@ -22,6 +23,7 @@ const ROUTES = {
   desilting: '/desilting',
   dailyPlot: '/daily-plot',
   master: '/master',
+  extract: '/extract',
 }
 
 const STORAGE_PREFIX = 'pptxpro:slides:v1'
@@ -1197,6 +1199,16 @@ function App({ data }) {
   }
 
   const template = useMemo(() => {
+    if (currentRoute === ROUTES.extract) {
+      return {
+        eyebrow: 'PPTXPro',
+        title: 'Image Extractor',
+        subtext: 'Upload any PPTX to extract every image from every slide. Review, reorder, and export them as individual slides.',
+        masterBgUrl: '',
+        slots: [],
+        themeLabel: '',
+      }
+    }
     if (currentRoute === ROUTES.master) {
       return {
         eyebrow: 'Custom Master',
@@ -1279,7 +1291,7 @@ function App({ data }) {
 
   useEffect(() => {
     const currentRoute = normalizeRoute(window.location.pathname)
-    if (!TEMPLATES[currentRoute] && currentRoute !== ROUTES.master) {
+    if (!TEMPLATES[currentRoute] && currentRoute !== ROUTES.master && currentRoute !== ROUTES.extract) {
       window.history.replaceState(null, '', ROUTES.clean)
     }
   }, [])
@@ -1455,8 +1467,12 @@ function App({ data }) {
     isPairComplete(pair, { slotKeys, requiresText }),
   )
   const slideCount = completePairs.length
+  const incompletePairCount = pairs.filter((pair) => {
+    if (!hasPairContent(pair, { slotKeys, requiresText })) return false
+    return !isPairComplete(pair, { slotKeys, requiresText })
+  }).length
   const movableCount = getMovableCount(pairs, { slotKeys, requiresText })
-  const canDownload = slideCount > 0 && !isGenerating && !isImporting
+  const canDownload = (slideCount > 0 || incompletePairCount > 0) && !isGenerating && !isImporting
 
   const handlePptxUpload = async (event) => {
     const file = event.target.files?.[0]
@@ -1567,7 +1583,7 @@ function App({ data }) {
       const backgroundImage = template.masterBgUrl
         ? new URL(template.masterBgUrl, window.location.href).toString()
         : undefined
-      await generateReport(completePairs, {
+      await generateReport(pairs, {
         fileName: resolvedFileName,
         backgroundImage,
         firstSlideImage: resolvedFirstSlideUrl || undefined,
@@ -1676,6 +1692,17 @@ function App({ data }) {
             >
               Master Creator
             </button>
+            <button
+              type="button"
+              className={`ghost${currentRoute === ROUTES.extract ? ' is-active' : ''}`}
+              onClick={() => {
+                if (currentRoute !== ROUTES.extract) {
+                  window.location.pathname = ROUTES.extract
+                }
+              }}
+            >
+              Extract Images
+            </button>
           </div>
           {currentRoute === ROUTES.dailyPlot && (
             <div className="app__subnav">
@@ -1719,7 +1746,7 @@ function App({ data }) {
               </button>
             </div>
           )}
-          {!(currentRoute === ROUTES.master && designerMode === 'design') && (
+          {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && (
             <>
               <div className="app__badge">Slides ready: {slideCount}</div>
               <button
@@ -1759,7 +1786,9 @@ function App({ data }) {
         </p>
       )}
 
-      {currentRoute === ROUTES.master && designerMode === 'design' ? (
+      {currentRoute === ROUTES.extract ? (
+        <ImageExtractor />
+      ) : currentRoute === ROUTES.master && designerMode === 'design' ? (
         <MasterDesigner
           customLayout={customLayout}
           onSave={async (layout) => {

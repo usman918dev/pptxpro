@@ -219,7 +219,24 @@ export const generateReport = async (
     const hasText = hasTextBox ? Boolean(resolveSlideText(pair)) : true
     return hasBefore && hasAfter && hasMiddle && hasText
   })
-  if (completePairs.length === 0) {
+
+  // Collect incomplete pairs: have at least one image but are not complete
+  const incompletePairs = pairs.filter((pair) => {
+    if (placeholders && placeholders.length > 0) {
+      const hasAny = placeholders.some((slot) => Boolean(pair?.[slot.key]))
+      const isComplete = placeholders.every((slot) => Boolean(pair?.[slot.key]))
+      return hasAny && !isComplete
+    }
+    const hasBefore = Boolean(pair?.beforeImage)
+    const hasAfter = Boolean(pair?.afterImage)
+    const hasMiddle = hasMiddleBox ? Boolean(pair?.middleImage) : true
+    const hasText = hasTextBox ? Boolean(resolveSlideText(pair)) : true
+    const isComplete = hasBefore && hasAfter && hasMiddle && hasText
+    const hasAny = hasBefore || hasAfter || (hasMiddleBox && Boolean(pair?.middleImage))
+    return hasAny && !isComplete
+  })
+
+  if (completePairs.length === 0 && incompletePairs.length === 0) {
     return
   }
 
@@ -437,6 +454,95 @@ export const generateReport = async (
           ...resolvedRightBox,
           sizing: { type: 'contain' },
         })
+      }
+
+      if (hasTextBox) {
+        const slideText = resolveSlideText(pair)
+        if (slideText) {
+          slide.addText(slideText, {
+            ...textBox,
+            fontFace: 'Calibri',
+            fontSize: resolvedTextFontSize,
+            color: resolvedTextColor,
+            align: resolvedTextAlign,
+            valign: 'middle',
+            bold: resolvedTextBold,
+          })
+        }
+      }
+    }
+  })
+
+
+  incompletePairs.forEach((pair) => {
+    const slide = pptx.addSlide(resolvedMasterTitle)
+
+    if (placeholders && placeholders.length > 0) {
+      // Custom layout: place any available images in their normal positions
+      placeholders.forEach((slot) => {
+        const imageSource = normalizeImage(pair?.[slot.key])
+        if (imageSource) {
+          slide.addImage({
+            ...imageSource,
+            x: slot.x,
+            y: slot.y,
+            w: slot.w,
+            h: slot.h,
+            sizing: { type: 'contain' },
+          })
+        }
+      })
+
+      if (textboxes && textboxes.length > 0) {
+        textboxes.forEach((box) => {
+          const textVal = typeof pair?.[box.key] === 'string' ? pair[box.key].trim() : ''
+          const textToUse = textVal || box.textDefault || ''
+          if (textToUse) {
+            slide.addText(textToUse, {
+              x: box.x,
+              y: box.y,
+              w: box.w,
+              h: box.h,
+              fontFace: box.fontFace || 'Calibri',
+              fontSize: box.fontSize || 20,
+              color: box.fontColor || '000000',
+              align: box.align || 'left',
+              valign: 'middle',
+              bold: Boolean(box.bold),
+            })
+          }
+        })
+      }
+    } else {
+      // Standard layout: place each available image in its own original placeholder box
+      const slotMap = [
+        { key: 'beforeImage', label: 'Before', box: resolvedLeftBox },
+        { key: 'middleImage', label: 'During', box: resolvedMiddleBox },
+        { key: 'afterImage', label: 'After', box: resolvedRightBox },
+      ]
+      for (const slot of slotMap) {
+        if (!slot.box) continue
+        const imageSource = normalizeImage(pair?.[slot.key])
+        if (imageSource) {
+          if (showLabels) {
+            slide.addText(slot.label, {
+              x: slot.box.x,
+              y: 1.6,
+              w: slot.box.w,
+              h: 0.4,
+              fontFace: 'Calibri',
+              fontSize: 18,
+              color: '111111',
+              bold: true,
+              align: 'center',
+            })
+          }
+          slide.addImage({
+            ...imageSource,
+            ...slot.box,
+            sizing: { type: 'contain' },
+          })
+        }
       }
 
       if (hasTextBox) {
