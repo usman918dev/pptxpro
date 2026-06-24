@@ -357,10 +357,17 @@ export const generateReport = async (
     addDateToSlide(firstSlide)
   }
 
-  completePairs.forEach((pair) => {
+  // ── Render all eligible pairs in original order ──────────────────────────
+  // Build a Set of all pairs that should generate a slide (complete + incomplete).
+  const eligiblePairSet = new Set([...completePairs, ...incompletePairs])
+
+  pairs.forEach((pair) => {
+    if (!eligiblePairSet.has(pair)) return
+
     const slide = pptx.addSlide(resolvedMasterTitle)
 
     if (placeholders && placeholders.length > 0) {
+      // Custom layout: render any image slots that are filled
       placeholders.forEach((slot) => {
         const imageSource = normalizeImage(pair?.[slot.key])
         if (imageSource) {
@@ -396,24 +403,42 @@ export const generateReport = async (
         })
       }
     } else {
-      if (showLabels) {
-        slide.addText('Before', {
-          x: resolvedLeftBox.x,
-          y: 1.6,
-          w: resolvedLeftBox.w,
-          h: 0.4,
-          fontFace: 'Calibri',
-          fontSize: 18,
-          color: '111111',
-          bold: true,
-          align: 'center',
-        })
+      // Standard layout
+      const isComplete = completePairs.includes(pair)
 
-        if (resolvedMiddleBox) {
-          slide.addText('Middle', {
-            x: resolvedMiddleBox.x,
+      if (isComplete) {
+        // All images present — show labels for all slots
+        if (showLabels) {
+          slide.addText('Before', {
+            x: resolvedLeftBox.x,
             y: 1.6,
-            w: resolvedMiddleBox.w,
+            w: resolvedLeftBox.w,
+            h: 0.4,
+            fontFace: 'Calibri',
+            fontSize: 18,
+            color: '111111',
+            bold: true,
+            align: 'center',
+          })
+
+          if (resolvedMiddleBox) {
+            slide.addText('Middle', {
+              x: resolvedMiddleBox.x,
+              y: 1.6,
+              w: resolvedMiddleBox.w,
+              h: 0.4,
+              fontFace: 'Calibri',
+              fontSize: 18,
+              color: '111111',
+              bold: true,
+              align: 'center',
+            })
+          }
+
+          slide.addText('After', {
+            x: resolvedRightBox.x,
+            y: 1.6,
+            w: resolvedRightBox.w,
             h: 0.4,
             fontFace: 'Calibri',
             fontSize: 18,
@@ -423,148 +448,93 @@ export const generateReport = async (
           })
         }
 
-        slide.addText('After', {
-          x: resolvedRightBox.x,
-          y: 1.6,
-          w: resolvedRightBox.w,
-          h: 0.4,
-          fontFace: 'Calibri',
-          fontSize: 18,
-          color: '111111',
-          bold: true,
-          align: 'center',
-        })
-      }
+        const beforeSource = normalizeImage(pair?.beforeImage)
+        const middleSource = normalizeImage(pair?.middleImage)
+        const afterSource = normalizeImage(pair?.afterImage)
 
-      const beforeSource = normalizeImage(pair?.beforeImage)
-      const middleSource = normalizeImage(pair?.middleImage)
-      const afterSource = normalizeImage(pair?.afterImage)
-
-      if (beforeSource) {
-        slide.addImage({
-          ...beforeSource,
-          ...resolvedLeftBox,
-          sizing: { type: 'contain' },
-        })
-      }
-
-      if (middleSource && resolvedMiddleBox) {
-        slide.addImage({
-          ...middleSource,
-          ...resolvedMiddleBox,
-          sizing: { type: 'contain' },
-        })
-      }
-
-      if (afterSource) {
-        slide.addImage({
-          ...afterSource,
-          ...resolvedRightBox,
-          sizing: { type: 'contain' },
-        })
-      }
-
-      if (hasTextBox) {
-        const slideText = resolveSlideText(pair)
-        if (slideText) {
-          slide.addText(slideText, {
-            ...textBox,
-            fontFace: 'Calibri',
-            fontSize: resolvedTextFontSize,
-            color: resolvedTextColor,
-            align: resolvedTextAlign,
-            valign: 'middle',
-            bold: resolvedTextBold,
-          })
-        }
-      }
-    }
-  })
-
-
-  incompletePairs.forEach((pair) => {
-    const slide = pptx.addSlide(resolvedMasterTitle)
-
-    if (placeholders && placeholders.length > 0) {
-      // Custom layout: place any available images in their normal positions
-      placeholders.forEach((slot) => {
-        const imageSource = normalizeImage(pair?.[slot.key])
-        if (imageSource) {
+        if (beforeSource) {
           slide.addImage({
-            ...imageSource,
-            x: slot.x,
-            y: slot.y,
-            w: slot.w,
-            h: slot.h,
+            ...beforeSource,
+            ...resolvedLeftBox,
             sizing: { type: 'contain' },
           })
         }
-      })
 
-      if (textboxes && textboxes.length > 0) {
-        textboxes.forEach((box) => {
-          const textVal = typeof pair?.[box.key] === 'string' ? pair[box.key].trim() : ''
-          const textToUse = textVal || box.textDefault || ''
-          if (textToUse) {
-            slide.addText(textToUse, {
-              x: box.x,
-              y: box.y,
-              w: box.w,
-              h: box.h,
-              fontFace: box.fontFace || 'Calibri',
-              fontSize: box.fontSize || 20,
-              color: box.fontColor || '000000',
-              align: box.align || 'left',
-              valign: 'middle',
-              bold: Boolean(box.bold),
-            })
-          }
-        })
-      }
-    } else {
-      // Standard layout: place each available image in its own original placeholder box
-      const slotMap = [
-        { key: 'beforeImage', label: 'Before', box: resolvedLeftBox },
-        { key: 'middleImage', label: 'During', box: resolvedMiddleBox },
-        { key: 'afterImage', label: 'After', box: resolvedRightBox },
-      ]
-      for (const slot of slotMap) {
-        if (!slot.box) continue
-        const imageSource = normalizeImage(pair?.[slot.key])
-        if (imageSource) {
-          if (showLabels) {
-            slide.addText(slot.label, {
-              x: slot.box.x,
-              y: 1.6,
-              w: slot.box.w,
-              h: 0.4,
+        if (middleSource && resolvedMiddleBox) {
+          slide.addImage({
+            ...middleSource,
+            ...resolvedMiddleBox,
+            sizing: { type: 'contain' },
+          })
+        }
+
+        if (afterSource) {
+          slide.addImage({
+            ...afterSource,
+            ...resolvedRightBox,
+            sizing: { type: 'contain' },
+          })
+        }
+
+        if (hasTextBox) {
+          const slideText = resolveSlideText(pair)
+          if (slideText) {
+            slide.addText(slideText, {
+              ...textBox,
               fontFace: 'Calibri',
-              fontSize: 18,
-              color: '111111',
-              bold: true,
-              align: 'center',
+              fontSize: resolvedTextFontSize,
+              color: resolvedTextColor,
+              align: resolvedTextAlign,
+              valign: 'middle',
+              bold: resolvedTextBold,
             })
           }
-          slide.addImage({
-            ...imageSource,
-            ...slot.box,
-            sizing: { type: 'contain' },
-          })
         }
-      }
+      } else {
+        // Partial — render only the filled slots
+        const slotMap = [
+          { key: 'beforeImage', label: 'Before', box: resolvedLeftBox },
+          { key: 'middleImage', label: 'During', box: resolvedMiddleBox },
+          { key: 'afterImage', label: 'After', box: resolvedRightBox },
+        ]
+        for (const slot of slotMap) {
+          if (!slot.box) continue
+          const imageSource = normalizeImage(pair?.[slot.key])
+          if (imageSource) {
+            if (showLabels) {
+              slide.addText(slot.label, {
+                x: slot.box.x,
+                y: 1.6,
+                w: slot.box.w,
+                h: 0.4,
+                fontFace: 'Calibri',
+                fontSize: 18,
+                color: '111111',
+                bold: true,
+                align: 'center',
+              })
+            }
+            slide.addImage({
+              ...imageSource,
+              ...slot.box,
+              sizing: { type: 'contain' },
+            })
+          }
+        }
 
-      if (hasTextBox) {
-        const slideText = resolveSlideText(pair)
-        if (slideText) {
-          slide.addText(slideText, {
-            ...textBox,
-            fontFace: 'Calibri',
-            fontSize: resolvedTextFontSize,
-            color: resolvedTextColor,
-            align: resolvedTextAlign,
-            valign: 'middle',
-            bold: resolvedTextBold,
-          })
+        if (hasTextBox) {
+          const slideText = resolveSlideText(pair)
+          if (slideText) {
+            slide.addText(slideText, {
+              ...textBox,
+              fontFace: 'Calibri',
+              fontSize: resolvedTextFontSize,
+              color: resolvedTextColor,
+              align: resolvedTextAlign,
+              valign: 'middle',
+              bold: resolvedTextBold,
+            })
+          }
         }
       }
     }
