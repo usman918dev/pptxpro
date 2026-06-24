@@ -220,12 +220,19 @@ export const generateReport = async (
     return hasBefore && hasAfter && hasMiddle && hasText
   })
 
-  // Collect incomplete pairs: have at least one image but are not complete
+  // For custom master layout: ALL non-complete pairs that have ANY content (image or text) get a slide.
+  // For standard layout: collect pairs that have at least one image but are not complete.
   const incompletePairs = pairs.filter((pair) => {
     if (placeholders && placeholders.length > 0) {
-      const hasAny = placeholders.some((slot) => Boolean(pair?.[slot.key]))
       const isComplete = placeholders.every((slot) => Boolean(pair?.[slot.key]))
-      return hasAny && !isComplete
+      if (isComplete) return false
+      // Include pairs with at least one image slot filled
+      const hasAnyImage = placeholders.some((slot) => Boolean(pair?.[slot.key]))
+      // OR at least one textbox value filled (for textbox-only slides)
+      const hasAnyText = textboxes && textboxes.length > 0
+        ? textboxes.some((box) => typeof pair?.[box.key] === 'string' && pair[box.key].trim())
+        : false
+      return hasAnyImage || hasAnyText
     }
     const hasBefore = Boolean(pair?.beforeImage)
     const hasAfter = Boolean(pair?.afterImage)
@@ -235,6 +242,7 @@ export const generateReport = async (
     const hasAny = hasBefore || hasAfter || (hasMiddleBox && Boolean(pair?.middleImage))
     return hasAny && !isComplete
   })
+
 
   if (completePairs.length === 0 && incompletePairs.length === 0) {
     return
