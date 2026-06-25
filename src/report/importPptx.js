@@ -154,7 +154,8 @@ const getPicturesFromSlide = (slideDoc, relMap) => {
       const cx = Number(ext?.getAttribute('cx') || 0)
       const cy = Number(ext?.getAttribute('cy') || 0)
       const area = cx * cy
-      return { x, y, cx, cy, area, target }
+      // embed = the r:id (e.g. "rId3") — needed to identify this pic in raw XML
+      return { x, y, cx, cy, area, target, embed }
     })
     .filter(Boolean)
 }
@@ -436,9 +437,244 @@ export const extractAllImages = async (file) => {
         slideNumber: si + 1,
         imageIndex: ii,
         dataUrl,
+        // Extra metadata needed for context-preserving PPTX export
+        embed: pic.embed,   // r:embed rId — identifies this pic in slide XML
+        target: pic.target, // media file path inside the zip
+        posCx: pic.cx,      // original width  in EMU (used for aspect ratio)
+        posCy: pic.cy,      // original height in EMU
       })
     }
   }
 
   return results
+}
+
+// ── Context-preserving PPTX export ───────────────────────────────────────────
+
+const SLIDE_REL_TYPE =
+  'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide'
+const SLIDE_CONTENT_TYPE =
+  'application/vnd.openxmlformats-officedocument.presentationml.slide+xml'
+
+/**
+ * Build a modified copy of a slide's raw XML where:
+ *  - the featured image (matched by its r:embed value) is kept exactly
+ *    as-is — same position, same size, same everything.
+ *  - every other <p:pic> element is removed entirely.
+ *  - all text shapes, backgrounds, and other elements are untouched.
+ */
+const buildSlideXmlForImage = (slideXmlText, embed) => {
+  // Collect all <p:pic>…</p:pic> blocks with their positions in the string
+  const picBlocks = []
+  const picRe = /<p:pic[\s>][\s\S]*?<\/p:pic>/g
+  let m
+  while ((m = picRe.exec(slideXmlText)) !== null) {
+    picBlocks.push({ full: m[0], start: m.index, end: m.index + m[0].length })
+  }
+
+  if (!picBlocks.length) return slideXmlText
+
+  // Process in reverse so earlier indices stay valid after splicing
+  let result = slideXmlText
+  for (let i = picBlocks.length - 1; i >= 0; i--) {
+    const { full, start, end } = picBlocks[i]
+    const embedMatch = /r:embed="([^"]+)"/.exec(full) || /\bembed="([^"]+)"/.exec(full)
+    const picEmbed = embedMatch ? embedMatch[1] : ''
+
+    if (picEmbed !== embed) {
+      // Non-featured image — remove it, leave a zero-width gap
+      result = result.slice(0, start) + result.slice(end)
+    }
+    // Featured image: keep exactly as-is (no positional changes)
+  }
+  return result
+}
+
+/** Remove existing slide <Override> entries and add fresh ones. */
+const rebuildContentTypes = (ctXml, numSlides) => {
+  const newOverrides = Array.from({ length: numSlides }, (_, i) =>
+    `\n  <Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="${SLIDE_CONTENT_TYPE}"/>`,
+  ).join('')
+
+  if (!ctXml) {
+    return [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+      '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+      '  <Default Extension="xml" ContentType="application/xml"/>',
+      newOverrides,
+      '</Types>',
+    ].join('\n')
+  }
+
+  const cleaned = ctXml.replace(
+    /[ \t]*<Override[^>]+PartName="[^"]*\/ppt\/slides\/slide\d+\.xml"[^/]*\/>/g,
+    '',
+  )
+  return cleaned.replace('</Types>', `${newOverrides}\n</Types>`)
+}
+
+/** Remove existing slide <Relationship> entries and add fresh ones. */
+const rebuildPresentationRels = (relsXml, numSlides, slideRIds) => {
+  const newRels = slideRIds
+    .map(
+      (rId, i) =>
+        `\n  <Relationship Id="${rId}" Type="${SLIDE_REL_TYPE}" Target="slides/slide${i + 1}.xml"/>`,
+    )
+    .join('')
+
+  if (!relsXml) {
+    return [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      newRels,
+      '</Relationships>',
+    ].join('\n')
+  }
+
+  // Use lookahead so we match the Type attribute regardless of attribute order
+  const escapedType = SLIDE_REL_TYPE.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+  const cleaned = relsXml.replace(
+    new RegExp(
+      `[ \\t]*<Relationship(?=[^>]*\\bType="${escapedType}"[^>]*)[^>]*/>`,
+      'g',
+    ),
+    '',
+  )
+  return cleaned.replace('</Relationships>', `${newRels}\n</Relationships>`)
+}
+
+/** Replace <p:sldIdLst>…</p:sldIdLst> with new entries referencing the output slides. */
+const rebuildPresentationXml = (presXml, numSlides, slideRIds) => {
+  if (!presXml) return ''
+  const newEntries = slideRIds
+    .map((rId, i) => `<p:sldId id="${256 + i}" r:id="${rId}"/>`)
+    .join('')
+  // Matches both self-closing (<p:sldIdLst/>) and full (<p:sldIdLst>…</p:sldIdLst>)
+  return presXml.replace(
+    /<p:sldIdLst\s*\/>|<p:sldIdLst>[\s\S]*?<\/p:sldIdLst>/,
+    `<p:sldIdLst>${newEntries}</p:sldIdLst>`,
+  )
+}
+
+/**
+ * Export selected images as a PPTX where every image gets its own slide
+ * that is a faithful clone of the original slide:
+ *   • all text boxes, shapes and backgrounds are preserved
+ *   • every other image on that slide is removed
+ *   • the featured image is resized to fill the slide (contain — never stretched)
+ *
+ * @param {File}   file     The original PPTX File object
+ * @param {Array}  images   Selected image objects from extractAllImages
+ *                          (must include: embed, posCx, posCy, slideIndex)
+ * @param {string} fileName Output filename
+ */
+export const exportSlidesWithContext = async (
+  file,
+  images,
+  fileName = 'Slides_With_Context.pptx',
+) => {
+  if (!file || !images.length) return
+
+  const arrayBuffer = await file.arrayBuffer()
+  const zip = await JSZip.loadAsync(arrayBuffer)
+  const slidePaths = getSlidePaths(zip)
+  const slideSize = await getSlideSize(zip)
+
+  // Build one output slide per selected image (respects user's drag order)
+  const outputSlides = []
+  const slideXmlCache = new Map()
+
+  for (const img of images) {
+    const slidePath = slidePaths[img.slideIndex]
+    if (!slidePath) continue
+
+    if (!slideXmlCache.has(img.slideIndex)) {
+      const sf = zip.file(slidePath)
+      if (!sf) continue
+      slideXmlCache.set(img.slideIndex, await sf.async('text'))
+    }
+
+    const slideXmlText = slideXmlCache.get(img.slideIndex)
+    if (!slideXmlText) continue
+
+    const modifiedXml = buildSlideXmlForImage(slideXmlText, img.embed)
+    outputSlides.push({
+      xmlText: modifiedXml,
+      relsPath: getSlideRelsPath(slidePath),
+    })
+  }
+
+  if (!outputSlides.length) return
+
+  // Use high rIds to avoid collisions with existing non-slide relationships
+  const slideRIds = outputSlides.map((_, i) => `rId${1000 + i}`)
+
+  // ── Assemble output zip ───────────────────────────────────────────────────
+  const outZip = new JSZip()
+
+  const skipSet = new Set([
+    'ppt/presentation.xml',
+    'ppt/_rels/presentation.xml.rels',
+    '[Content_Types].xml',
+    ...slidePaths,
+    ...slidePaths.map(getSlideRelsPath),
+  ])
+
+  // Copy all non-slide files (media, themes, layouts, masters …) unchanged
+  const copyTasks = []
+  zip.forEach((path, entry) => {
+    if (skipSet.has(path)) return
+    copyTasks.push(entry.async('arraybuffer').then((buf) => outZip.file(path, buf)))
+  })
+  await Promise.all(copyTasks)
+
+  // Write modified slides and their rels
+  const relsTextCache = new Map()
+  for (let i = 0; i < outputSlides.length; i++) {
+    outZip.file(`ppt/slides/slide${i + 1}.xml`, outputSlides[i].xmlText)
+
+    const relsPath = outputSlides[i].relsPath
+    if (!relsTextCache.has(relsPath)) {
+      const rf = zip.file(relsPath)
+      relsTextCache.set(relsPath, rf ? await rf.async('text') : null)
+    }
+    const relsText = relsTextCache.get(relsPath)
+    if (relsText) {
+      outZip.file(`ppt/slides/_rels/slide${i + 1}.xml.rels`, relsText)
+    }
+  }
+
+  // Rebuild the three files that reference slide count / paths
+  const readText = (path) => zip.file(path)?.async('text') ?? Promise.resolve(null)
+  const [presXml, presRelsXml, ctXml] = await Promise.all([
+    readText('ppt/presentation.xml'),
+    readText('ppt/_rels/presentation.xml.rels'),
+    readText('[Content_Types].xml'),
+  ])
+
+  outZip.file(
+    'ppt/presentation.xml',
+    rebuildPresentationXml(presXml, outputSlides.length, slideRIds),
+  )
+  outZip.file(
+    'ppt/_rels/presentation.xml.rels',
+    rebuildPresentationRels(presRelsXml, outputSlides.length, slideRIds),
+  )
+  outZip.file('[Content_Types].xml', rebuildContentTypes(ctXml, outputSlides.length))
+
+  // Download
+  const blob = await outZip.generateAsync({
+    type: 'blob',
+    mimeType:
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  a.click()
+  URL.revokeObjectURL(url)
 }

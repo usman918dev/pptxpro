@@ -668,6 +668,19 @@
   box-shadow: none;
 }
 
+.button--context {
+  background: linear-gradient(120deg, #1565c0, #00897b);
+  box-shadow: 0 12px 20px rgba(21, 101, 192, 0.22);
+}
+
+.button--context:hover {
+  box-shadow: 0 16px 24px rgba(21, 101, 192, 0.32);
+}
+
+.button--context:disabled {
+  box-shadow: none;
+}
+
 .file-input {
   display: none;
 }

@@ -1,22 +1,31 @@
 import { useRef, useState, useCallback } from 'react'
-import { extractAllImages } from './report/importPptx'
+import { extractAllImages, exportSlidesWithContext } from './report/importPptx'
 import PptxGenJS from 'pptxgenjs'
 import JSZip from 'jszip'
 
 // ── Export helpers ────────────────────────────────────────────────────────────
 
+// Slide dimensions for 3:4 portrait (width × height in inches)
+const SLIDE_W = 7.5
+const SLIDE_H = 10.0
+
 const exportImagesToPptx = async (images, fileName = 'Extracted_Images.pptx') => {
   const pptx = new PptxGenJS()
-  pptx.layout = 'LAYOUT_WIDE'
+
+  // Define a custom 3:4 layout (portrait)
+  pptx.defineLayout({ name: 'PORTRAIT_3_4', width: SLIDE_W, height: SLIDE_H })
+  pptx.layout = 'PORTRAIT_3_4'
 
   for (const img of images) {
     const slide = pptx.addSlide()
+
+    // Place image with contain sizing — never stretched, centered, preserves aspect ratio
     slide.addImage({
       data: img.dataUrl,
       x: 0,
       y: 0,
-      w: 13.333,
-      h: 7.5,
+      w: SLIDE_W,
+      h: SLIDE_H,
       sizing: { type: 'contain', align: 'center', valign: 'middle' },
     })
   }
@@ -30,15 +39,20 @@ const exportImagesToPptx = async (images, fileName = 'Extracted_Images.pptx') =>
  * aspect ratio. The canvas is always TARGET_W × TARGET_H with a white
  * background, so even very small/narrow images become properly-sized JPEGs.
  */
+// 3:4 portrait canvas dimensions (width × height)
 const TARGET_W = 1440
-const TARGET_H = 2160
+const TARGET_H = 1920
 
+/**
+ * Convert a dataUrl to a high-resolution JPEG at 3:4 (portrait) aspect ratio.
+ * The image is letterboxed (contain) — it fits inside the canvas while
+ * preserving its natural aspect ratio. White background fills any empty space.
+ * The image is NEVER stretched or distorted.
+ */
 const dataUrlToJpegBase64 = (dataUrl, quality = 0.92) =>
   new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = () => {
-      // Always output at TARGET_W × TARGET_H — stretch the image to fill completely.
-      // This turns even a very narrow strip into a full-resolution image.
       const canvas = document.createElement('canvas')
       canvas.width = TARGET_W
       canvas.height = TARGET_H
@@ -48,10 +62,17 @@ const dataUrlToJpegBase64 = (dataUrl, quality = 0.92) =>
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, TARGET_W, TARGET_H)
 
-      // Stretch to fill — no aspect ratio preservation, no padding
+      // Letterbox: scale the image to fit inside TARGET_W × TARGET_H
+      // while preserving aspect ratio (contain, not cover)
+      const scale = Math.min(TARGET_W / img.naturalWidth, TARGET_H / img.naturalHeight)
+      const drawW = img.naturalWidth * scale
+      const drawH = img.naturalHeight * scale
+      const offsetX = (TARGET_W - drawW) / 2
+      const offsetY = (TARGET_H - drawH) / 2
+
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = 'high'
-      ctx.drawImage(img, 0, 0, TARGET_W, TARGET_H)
+      ctx.drawImage(img, offsetX, offsetY, drawW, drawH)
 
       const jpegDataUrl = canvas.toDataURL('image/jpeg', quality)
       resolve(jpegDataUrl.replace(/^data:image\/jpeg;base64,/, ''))
@@ -199,14 +220,16 @@ function ImageCard({ item, isSelected, onToggle, onDragStart, onDragOver, onDrop
 export function ImageExtractor() {
   const [images, setImages] = useState([])
   const [selected, setSelected] = useState(new Set())
+  const [originalFile, setOriginalFile] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isExportingPptx, setIsExportingPptx] = useState(false)
   const [isExportingJpeg, setIsExportingJpeg] = useState(false)
+  const [isExportingContext, setIsExportingContext] = useState(false)
   const [status, setStatus] = useState({ type: 'idle', message: '' })
   const [dragIndex, setDragIndex] = useState(null)
   const [dragOverIndex, setDragOverIndex] = useState(null)
 
-  const isBusy = isLoading || isExportingPptx || isExportingJpeg
+  const isBusy = isLoading || isExportingPptx || isExportingJpeg || isExportingContext
 
   const handleFile = useCallback(async (file) => {
     try {
@@ -214,6 +237,7 @@ export function ImageExtractor() {
       setStatus({ type: 'working', message: 'Reading PPTX…' })
       setImages([])
       setSelected(new Set())
+      setOriginalFile(file)
 
       const extracted = await extractAllImages(file)
 
@@ -281,9 +305,34 @@ export function ImageExtractor() {
     }
   }
 
+  const handleExportWithContext = async () => {
+    if (!canExport || !originalFile) return
+    try {
+      setIsExportingContext(true)
+      setStatus({
+        type: 'working',
+        message: `Building ${selectedImages.length} slide${selectedImages.length !== 1 ? 's' : ''} with original context…`,
+      })
+      await exportSlidesWithContext(
+        originalFile,
+        selectedImages,
+        `Slides_With_Context_${getDateStr()}.pptx`,
+      )
+      setStatus({
+        type: 'success',
+        message: `Downloaded ${selectedImages.length} slide${selectedImages.length !== 1 ? 's' : ''} with original layout preserved.`,
+      })
+    } catch (err) {
+      setStatus({ type: 'error', message: 'Context export failed: ' + (err?.message || 'Unknown error') })
+    } finally {
+      setIsExportingContext(false)
+    }
+  }
+
   const handleReset = () => {
     setImages([])
     setSelected(new Set())
+    setOriginalFile(null)
     setStatus({ type: 'idle', message: '' })
   }
 
@@ -328,17 +377,29 @@ export function ImageExtractor() {
                 ? 'Converting…'
                 : `Export JPEG${selectedImages.length !== 1 ? 's' : ''} (${selectedImages.length})`}
             </button>
-            {/* PPTX export */}
+            {/* PPTX — images only */}
             <button
               type="button"
               className="button"
               onClick={handleExportPptx}
               disabled={!canExport}
-              title="Download selected images as a PPTX, one image per slide"
+              title="Download selected images as a PPTX, one image per slide (images only)"
             >
               {isExportingPptx
                 ? 'Building PPTX…'
                 : `Export PPTX (${selectedImages.length})`}
+            </button>
+            {/* PPTX — with original slide context */}
+            <button
+              type="button"
+              className="button button--context"
+              onClick={handleExportWithContext}
+              disabled={!canExport || !originalFile}
+              title="Each image gets its own slide cloned from the original — text boxes, shapes and backgrounds are preserved"
+            >
+              {isExportingContext
+                ? 'Building slides…'
+                : `Export PPTX + Context (${selectedImages.length})`}
             </button>
           </div>
         </div>
@@ -351,7 +412,7 @@ export function ImageExtractor() {
       {images.length > 0 && (
         <>
           <p className="extractor__hint">
-            Click to select/deselect · Drag to reorder · Export as PPTX (one image per slide) or as JPEGs in a ZIP
+            Click to select/deselect · Drag to reorder · <strong>Export PPTX + Context</strong> clones the original slide for each image (text, shapes &amp; layout preserved)
           </p>
           <div className="extractor__grid">
             {images.map((img, index) => (
