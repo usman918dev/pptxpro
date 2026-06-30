@@ -19,14 +19,16 @@ const exportImagesToPptx = async (images, fileName = 'Extracted_Images.pptx') =>
   for (const img of images) {
     const slide = pptx.addSlide()
 
-    // Place image with contain sizing — never stretched, centered, preserves aspect ratio
+    // Convert each image to a 3:4 portrait JPEG with a white background/border.
+    // This prevents the image from being stretched or distorted in PowerPoint.
+    const jpegBase64 = await dataUrlToJpegBase64(img.dataUrl)
+
     slide.addImage({
-      data: img.dataUrl,
+      data: `data:image/jpeg;base64,${jpegBase64}`,
       x: 0,
       y: 0,
       w: SLIDE_W,
       h: SLIDE_H,
-      sizing: { type: 'contain', align: 'center', valign: 'middle' },
     })
   }
 
@@ -45,9 +47,7 @@ const TARGET_H = 1920
 
 /**
  * Convert a dataUrl to a high-resolution JPEG at 3:4 (portrait) aspect ratio.
- * The image is letterboxed (contain) — it fits inside the canvas while
- * preserving its natural aspect ratio. White background fills any empty space.
- * The image is NEVER stretched or distorted.
+ * The image is stretched to fill the entire TARGET_W x TARGET_H canvas.
  */
 const dataUrlToJpegBase64 = (dataUrl, quality = 0.92) =>
   new Promise((resolve, reject) => {
@@ -58,21 +58,10 @@ const dataUrlToJpegBase64 = (dataUrl, quality = 0.92) =>
       canvas.height = TARGET_H
       const ctx = canvas.getContext('2d')
 
-      // White background (JPEG has no transparency)
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, TARGET_W, TARGET_H)
-
-      // Letterbox: scale the image to fit inside TARGET_W × TARGET_H
-      // while preserving aspect ratio (contain, not cover)
-      const scale = Math.min(TARGET_W / img.naturalWidth, TARGET_H / img.naturalHeight)
-      const drawW = img.naturalWidth * scale
-      const drawH = img.naturalHeight * scale
-      const offsetX = (TARGET_W - drawW) / 2
-      const offsetY = (TARGET_H - drawH) / 2
-
+      // Draw the image stretched to cover the entire canvas
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = 'high'
-      ctx.drawImage(img, offsetX, offsetY, drawW, drawH)
+      ctx.drawImage(img, 0, 0, TARGET_W, TARGET_H)
 
       const jpegDataUrl = canvas.toDataURL('image/jpeg', quality)
       resolve(jpegDataUrl.replace(/^data:image\/jpeg;base64,/, ''))
