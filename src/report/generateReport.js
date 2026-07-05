@@ -2,7 +2,7 @@ import PptxGenJS from 'pptxgenjs'
 
 const MASTER_TITLE = 'CLEAN_PUNJAB_MASTER'
 const SLIDE_TITLE = 'Plots Cleaning-Activity'
-const FIRST_SLIDE_URL = '/first-slide.png'
+const FIRST_SLIDE_URL = '/first-slide.jpeg'
 const SECOND_SLIDE_URL = ''
 const LAST_SLIDE_URL = '/last-slide.png'
 const FILE_NAME_PREFIX = 'Plots  Cleaning-Activity_Tehsil Kamoke'
