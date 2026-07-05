@@ -307,9 +307,9 @@ const TEMPLATES = {
     subtext:
       'Drop a Before and After image. A new row appears automatically and the page scrolls to it.',
     masterBgUrl: '/master-slide.png',
-    firstSlideUrl: '/first-slide.png',
+    firstSlideUrl: '/first-slide.jpeg',
     secondSlideUrl: '',
-    lastSlideUrl: '/last-slide.png',
+    lastSlideUrl: '/last-slide.jpeg',
     fileNamePrefix: 'Plots  Cleaning-Activity_Tehsil Kamoke',
     masterTitle: 'CLEAN_PUNJAB_MASTER',
     slideTitle: 'Plots Cleaning-Activity',
