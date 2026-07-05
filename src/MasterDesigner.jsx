@@ -291,6 +291,7 @@ export function MasterDesigner({
       y: 2.0,
       w: 4.0,
       h: 3.5,
+      borderRadius: 0,
     }])
     setSelectedId(id)
   }
@@ -677,7 +678,7 @@ export function MasterDesigner({
                     height: `${(p.h / 7.5) * 100}%`,
                     border: isSelected ? '2px solid #0b7a38' : '2px dashed #666',
                     backgroundColor: isSelected ? 'rgba(11, 122, 56, 0.15)' : 'rgba(255, 255, 255, 0.75)',
-                    borderRadius: '8px',
+                    borderRadius: p.borderRadius ? `${p.borderRadius}px` : '0px',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
@@ -844,14 +845,26 @@ export function MasterDesigner({
               </div>
 
               {selectedElement.id.startsWith('placeholder_') ? (
-                <div className="sidebar-group">
-                  <label className="label">Placeholder Label</label>
-                  <input
-                    type="text"
-                    value={selectedElement.label}
-                    onChange={(e) => updateElement(selectedElement.id, { label: e.target.value })}
-                  />
-                </div>
+                <>
+                  <div className="sidebar-group">
+                    <label className="label">Placeholder Label</label>
+                    <input
+                      type="text"
+                      value={selectedElement.label}
+                      onChange={(e) => updateElement(selectedElement.id, { label: e.target.value })}
+                    />
+                  </div>
+                  <div className="sidebar-group">
+                    <label className="label">Border Radius (px)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={selectedElement.borderRadius ?? 0}
+                      onChange={(e) => updateElement(selectedElement.id, { borderRadius: Math.max(0, parseInt(e.target.value) || 0) })}
+                    />
+                  </div>
+                </>
               ) : (
                 <>
                   <div className="sidebar-group">

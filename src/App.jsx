@@ -4,6 +4,8 @@ import { generateReport } from './report/generateReport'
 import { importPptxSlides } from './report/importPptx'
 import { MasterDesigner } from './MasterDesigner'
 import { ImageExtractor } from './ImageExtractor'
+import { PptxMerger } from './PptxMerger'
+import { PdfToPptx } from './PdfToPptx'
 
 const EMPTY_PAIR = {
   beforeImage: '',
@@ -24,6 +26,8 @@ const ROUTES = {
   dailyPlot: '/daily-plot',
   master: '/master',
   extract: '/extract',
+  merge: '/merge',
+  pdf: '/pdf',
 }
 
 const STORAGE_PREFIX = 'pptxpro:slides:v1'
@@ -833,6 +837,7 @@ function DropSlot({ label, value, onChange, className = '', urlMode = 'inline', 
             className={`drop-slot__preview${isPendingDelete ? ' is-fading' : ''}`}
             src={displayValue}
             alt={`${label} preview`}
+            style={style?.borderRadius !== undefined ? { borderRadius: style.borderRadius } : {}}
           />
           {isPendingDelete ? (
             <button
@@ -1199,11 +1204,31 @@ function App({ data }) {
   }
 
   const template = useMemo(() => {
+    if (currentRoute === ROUTES.pdf) {
+      return {
+        eyebrow: 'PPTXPro',
+        title: 'PDF to PPTX Converter',
+        subtext: 'Upload a PDF file to convert its pages into PowerPoint slides. Reorder, exclude, and download them.',
+        masterBgUrl: '',
+        slots: [],
+        themeLabel: '',
+      }
+    }
     if (currentRoute === ROUTES.extract) {
       return {
         eyebrow: 'PPTXPro',
         title: 'Image Extractor',
         subtext: 'Upload any PPTX to extract every image from every slide. Review, reorder, and export them as individual slides.',
+        masterBgUrl: '',
+        slots: [],
+        themeLabel: '',
+      }
+    }
+    if (currentRoute === ROUTES.merge) {
+      return {
+        eyebrow: 'PPTXPro',
+        title: 'Merge Presentations',
+        subtext: 'Upload multiple PPTX files to merge their slides in sequential order.',
         masterBgUrl: '',
         slots: [],
         themeLabel: '',
@@ -1235,6 +1260,7 @@ function App({ data }) {
             width: `${(p.w / 13.333) * 100}%`,
             height: `${(p.h / 7.5) * 100}%`,
             position: 'absolute',
+            borderRadius: p.borderRadius ? `${p.borderRadius}px` : '0px',
           }
         })),
         textBoxes: customLayout?.textboxes || []
@@ -1291,7 +1317,13 @@ function App({ data }) {
 
   useEffect(() => {
     const currentRoute = normalizeRoute(window.location.pathname)
-    if (!TEMPLATES[currentRoute] && currentRoute !== ROUTES.master && currentRoute !== ROUTES.extract) {
+    if (
+      !TEMPLATES[currentRoute] &&
+      currentRoute !== ROUTES.master &&
+      currentRoute !== ROUTES.extract &&
+      currentRoute !== ROUTES.merge &&
+      currentRoute !== ROUTES.pdf
+    ) {
       window.history.replaceState(null, '', ROUTES.clean)
     }
   }, [])
@@ -1703,6 +1735,28 @@ function App({ data }) {
             >
               Extract Images
             </button>
+            <button
+              type="button"
+              className={`ghost${currentRoute === ROUTES.merge ? ' is-active' : ''}`}
+              onClick={() => {
+                if (currentRoute !== ROUTES.merge) {
+                  window.location.pathname = ROUTES.merge
+                }
+              }}
+            >
+              Merge Presentations
+            </button>
+            <button
+              type="button"
+              className={`ghost${currentRoute === ROUTES.pdf ? ' is-active' : ''}`}
+              onClick={() => {
+                if (currentRoute !== ROUTES.pdf) {
+                  window.location.pathname = ROUTES.pdf
+                }
+              }}
+            >
+              PDF to PPTX
+            </button>
           </div>
           {currentRoute === ROUTES.dailyPlot && (
             <div className="app__subnav">
@@ -1746,7 +1800,7 @@ function App({ data }) {
               </button>
             </div>
           )}
-          {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && (
+          {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && currentRoute !== ROUTES.merge && currentRoute !== ROUTES.pdf && (
             <>
               <div className="app__badge">Slides ready: {slideCount}</div>
               <button
@@ -1788,6 +1842,10 @@ function App({ data }) {
 
       {currentRoute === ROUTES.extract ? (
         <ImageExtractor />
+      ) : currentRoute === ROUTES.merge ? (
+        <PptxMerger />
+      ) : currentRoute === ROUTES.pdf ? (
+        <PdfToPptx />
       ) : currentRoute === ROUTES.master && designerMode === 'design' ? (
         <MasterDesigner
           customLayout={customLayout}
@@ -1853,6 +1911,7 @@ function App({ data }) {
                   width: `${(p.w / 13.333) * 100}%`,
                   height: `${(p.h / 7.5) * 100}%`,
                   position: 'absolute',
+                  borderRadius: p.borderRadius ? `${p.borderRadius}px` : '0px',
                 }
               }))}
               onChange={(key, value) => {
@@ -2031,6 +2090,7 @@ function App({ data }) {
                   width: `${(p.w / 13.333) * 100}%`,
                   height: `${(p.h / 7.5) * 100}%`,
                   position: 'absolute',
+                  borderRadius: p.borderRadius ? `${p.borderRadius}px` : '0px',
                 }
               }))}
               onChange={(key, value) => {

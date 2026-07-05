@@ -79,6 +79,71 @@ const normalizeImage = (image) => {
   return { data: `data:image/jpeg;base64,${trimmed}` }
 }
 
+const roundImageCorners = (imageSource, borderRadius, slotW, slotH) => {
+  return new Promise((resolve) => {
+    if (!borderRadius || borderRadius <= 0) {
+      resolve(imageSource)
+      return
+    }
+
+    let src = ''
+    if (imageSource && typeof imageSource === 'object') {
+      src = imageSource.data || imageSource.path || ''
+    }
+
+    if (!src) {
+      resolve(imageSource)
+      return
+    }
+
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.width
+        canvas.height = img.height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          resolve(imageSource)
+          return
+        }
+
+        const w = slotW || 4.0
+        const h = slotH || 3.0
+        const renderedW = Math.min(w, h * (img.width / img.height))
+        const scale = img.width / (renderedW * 100)
+        const radius = Math.min(img.width / 2, img.height / 2, borderRadius * scale)
+
+        ctx.beginPath()
+        ctx.moveTo(radius, 0)
+        ctx.lineTo(img.width - radius, 0)
+        ctx.quadraticCurveTo(img.width, 0, img.width, radius)
+        ctx.lineTo(img.width, img.height - radius)
+        ctx.quadraticCurveTo(img.width, img.height, img.width - radius, img.height)
+        ctx.lineTo(radius, img.height)
+        ctx.quadraticCurveTo(0, img.height, 0, img.height - radius)
+        ctx.lineTo(0, radius)
+        ctx.quadraticCurveTo(0, 0, radius, 0)
+        ctx.closePath()
+        ctx.clip()
+
+        ctx.drawImage(img, 0, 0)
+
+        const dataUrl = canvas.toDataURL('image/png')
+        resolve({ data: dataUrl })
+      } catch (err) {
+        console.error('Error rounding corners:', err)
+        resolve(imageSource)
+      }
+    }
+    img.onerror = () => {
+      resolve(imageSource)
+    }
+    img.src = src
+  })
+}
+
 const defineMaster = (
   pptx,
   { backgroundImage, slideTitle = SLIDE_TITLE, masterTitle = MASTER_TITLE } = {},
@@ -300,9 +365,12 @@ export const generateReport = async (
   }
 
   if (firstSlidePlaceholders && firstSlidePlaceholders.length > 0) {
-    firstSlidePlaceholders.forEach((slot) => {
-      const imageSource = normalizeImage(firstSlideData?.[slot.key])
+    for (const slot of firstSlidePlaceholders) {
+      let imageSource = normalizeImage(firstSlideData?.[slot.key])
       if (imageSource) {
+        if (slot.borderRadius && slot.borderRadius > 0) {
+          imageSource = await roundImageCorners(imageSource, slot.borderRadius, slot.w, slot.h)
+        }
         firstSlide.addImage({
           ...imageSource,
           x: slot.x,
@@ -312,7 +380,7 @@ export const generateReport = async (
           sizing: { type: 'contain' },
         })
       }
-    })
+    }
   }
   if (firstSlideTextboxes && firstSlideTextboxes.length > 0) {
     firstSlideTextboxes.forEach((box) => {
@@ -361,16 +429,19 @@ export const generateReport = async (
   // Build a Set of all pairs that should generate a slide (complete + incomplete).
   const eligiblePairSet = new Set([...completePairs, ...incompletePairs])
 
-  pairs.forEach((pair) => {
-    if (!eligiblePairSet.has(pair)) return
+  for (const pair of pairs) {
+    if (!eligiblePairSet.has(pair)) continue
 
     const slide = pptx.addSlide(resolvedMasterTitle)
 
     if (placeholders && placeholders.length > 0) {
       // Custom layout: render any image slots that are filled
-      placeholders.forEach((slot) => {
-        const imageSource = normalizeImage(pair?.[slot.key])
+      for (const slot of placeholders) {
+        let imageSource = normalizeImage(pair?.[slot.key])
         if (imageSource) {
+          if (slot.borderRadius && slot.borderRadius > 0) {
+            imageSource = await roundImageCorners(imageSource, slot.borderRadius, slot.w, slot.h)
+          }
           slide.addImage({
             ...imageSource,
             x: slot.x,
@@ -380,7 +451,7 @@ export const generateReport = async (
             sizing: { type: 'contain' },
           })
         }
-      })
+      }
 
       if (textboxes && textboxes.length > 0) {
         textboxes.forEach((box) => {
@@ -538,7 +609,7 @@ export const generateReport = async (
         }
       }
     }
-  })
+  }
 
   const lastSlide = pptx.addSlide()
   const lastSlideSource = normalizeImage(lastSlideImage || LAST_SLIDE_URL)
@@ -552,9 +623,12 @@ export const generateReport = async (
   }
 
   if (lastSlidePlaceholders && lastSlidePlaceholders.length > 0) {
-    lastSlidePlaceholders.forEach((slot) => {
-      const imageSource = normalizeImage(lastSlideData?.[slot.key])
+    for (const slot of lastSlidePlaceholders) {
+      let imageSource = normalizeImage(lastSlideData?.[slot.key])
       if (imageSource) {
+        if (slot.borderRadius && slot.borderRadius > 0) {
+          imageSource = await roundImageCorners(imageSource, slot.borderRadius, slot.w, slot.h)
+        }
         lastSlide.addImage({
           ...imageSource,
           x: slot.x,
@@ -564,7 +638,7 @@ export const generateReport = async (
           sizing: { type: 'contain' },
         })
       }
-    })
+    }
   }
   if (lastSlideTextboxes && lastSlideTextboxes.length > 0) {
     lastSlideTextboxes.forEach((box) => {

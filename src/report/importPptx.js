@@ -678,3 +678,138 @@ export const exportSlidesWithContext = async (
   a.click()
   URL.revokeObjectURL(url)
 }
+
+/**
+ * Merge multiple PPTX files sequentially.
+ * 
+ * @param {File[]} files Array of PPTX file objects.
+ * @param {function} onProgress Callback function for progress updates: (message) => void
+ * @returns {Promise<Blob>} The merged PPTX presentation as a Blob.
+ */
+export const mergePptxFiles = async (files, onProgress) => {
+  if (!files || files.length === 0) {
+    throw new Error('No files selected for merging.')
+  }
+
+  onProgress?.('Loading the base presentation...')
+  const baseFile = files[0]
+  const baseArrayBuffer = await baseFile.arrayBuffer()
+  const mergedZip = await JSZip.loadAsync(baseArrayBuffer)
+
+  // Identify and delete base slide files so we start clean
+  onProgress?.('Cleaning up base slides...')
+  const baseSlidePaths = getSlidePaths(mergedZip)
+  baseSlidePaths.forEach((path) => {
+    mergedZip.remove(path)
+    mergedZip.remove(getSlideRelsPath(path))
+  })
+
+  const mergedSlides = []
+
+  // Iterate through all files and extract slides
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+    const file = files[fileIndex]
+    onProgress?.(`Reading file ${fileIndex + 1} of ${files.length}: ${file.name}...`)
+    
+    const arrayBuffer = await file.arrayBuffer()
+    const zip = await JSZip.loadAsync(arrayBuffer)
+    const slidePaths = getSlidePaths(zip)
+
+    for (let s = 0; s < slidePaths.length; s++) {
+      onProgress?.(`Processing slide ${s + 1} of ${slidePaths.length} from file ${fileIndex + 1}...`)
+      const slidePath = slidePaths[s]
+      const slideFile = zip.file(slidePath)
+      if (!slideFile) continue
+
+      const slideXmlText = await slideFile.async('text')
+      const relsPath = getSlideRelsPath(slidePath)
+      const relsFile = zip.file(relsPath)
+      let relsXmlText = relsFile ? await relsFile.async('text') : null
+
+      if (relsXmlText) {
+        const parser = new DOMParser()
+        const relsDoc = parser.parseFromString(relsXmlText, 'application/xml')
+        const relsList = Array.from(relsDoc.getElementsByTagName('Relationship'))
+
+        for (const rel of relsList) {
+          const target = rel.getAttribute('Target')
+          const type = rel.getAttribute('Type')
+          if (!target || !type) continue
+
+          const isInternalLayoutOrMaster =
+            type.endsWith('/slideLayout') ||
+            type.endsWith('/slideMaster') ||
+            type.endsWith('/notesLayout')
+
+          if (!isInternalLayoutOrMaster) {
+            const normalizedPath = normalizeTarget(target)
+            const mediaFile = zip.file(normalizedPath)
+
+            if (mediaFile) {
+              const parts = target.split('/')
+              const targetFilename = parts.pop()
+              const dirPath = parts.join('/') // e.g. "../media" or "../charts"
+
+              const newTargetName = `p${fileIndex}_s${s}_${targetFilename}`
+              const newTarget = `${dirPath}/${newTargetName}`
+              const newZipPath = normalizeTarget(newTarget)
+
+              // Copy file to merged zip
+              const mediaData = await mediaFile.async('arraybuffer')
+              mergedZip.file(newZipPath, mediaData)
+
+              // Update relationship target
+              rel.setAttribute('Target', newTarget)
+            }
+          }
+        }
+        relsXmlText = new XMLSerializer().serializeToString(relsDoc)
+      }
+
+      mergedSlides.push({
+        xmlText: slideXmlText,
+        relsText: relsXmlText,
+      })
+    }
+  }
+
+  onProgress?.('Assembling presentation structure...')
+  const slideRIds = mergedSlides.map((_, i) => `rId${1000 + i}`)
+
+  for (let i = 0; i < mergedSlides.length; i++) {
+    const slideNum = i + 1
+    mergedZip.file(`ppt/slides/slide${slideNum}.xml`, mergedSlides[i].xmlText)
+    if (mergedSlides[i].relsText) {
+      mergedZip.file(`ppt/slides/_rels/slide${slideNum}.xml.rels`, mergedSlides[i].relsText)
+    }
+  }
+
+  // Rebuild presentation xml, presentation rels, and content types
+  const readText = (path) => mergedZip.file(path)?.async('text') ?? Promise.resolve(null)
+  const [presXml, presRelsXml, ctXml] = await Promise.all([
+    readText('ppt/presentation.xml'),
+    readText('ppt/_rels/presentation.xml.rels'),
+    readText('[Content_Types].xml'),
+  ])
+
+  mergedZip.file(
+    'ppt/presentation.xml',
+    rebuildPresentationXml(presXml, mergedSlides.length, slideRIds)
+  )
+  mergedZip.file(
+    'ppt/_rels/presentation.xml.rels',
+    rebuildPresentationRels(presRelsXml, mergedSlides.length, slideRIds)
+  )
+  mergedZip.file('[Content_Types].xml', rebuildContentTypes(ctXml, mergedSlides.length))
+
+  onProgress?.('Generating final presentation package...')
+  const blob = await mergedZip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  })
+
+  return blob
+}
+
