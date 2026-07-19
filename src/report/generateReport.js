@@ -10,6 +10,7 @@ const SLIDE_SIZE = { w: 13.333, h: 7.5 }
 
 const DATE_BOX = { x: 10.7, y: 6.88, w: 2.4, h: 0.4 }
 
+
 // Matches the slide preview percentages: 7%, 35.333%, 40%, 53.333% on 13.333x7.5
 const LEFT_BOX = { x: 0.93, y: 2.65, w: 5.33, h: 4.0 }
 const RIGHT_BOX = { x: 7.1, y: 2.65, w: 5.33, h: 4.0 }
