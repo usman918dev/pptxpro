@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { generateReport } from './report/generateReport'
+import { generateReport, generateCompletedSlidesReport } from './report/generateReport'
 import { importPptxSlides } from './report/importPptx'
+import JSZip from 'jszip'
 import { MasterDesigner } from './MasterDesigner'
 import { ImageExtractor } from './ImageExtractor'
 import { PptxMerger } from './PptxMerger'
 import { PdfToPptx } from './PdfToPptx'
+import { PdfMerger } from './PdfMerger'
+import { CollageMaker } from './CollageMaker'
 
 const EMPTY_PAIR = {
   beforeImage: '',
@@ -28,6 +31,8 @@ const ROUTES = {
   extract: '/extract',
   merge: '/merge',
   pdf: '/pdf',
+  mergePdf: '/merge-pdf',
+  collage: '/collage',
 }
 
 const STORAGE_PREFIX = 'pptxpro:slides:v1'
@@ -1204,6 +1209,26 @@ function App({ data }) {
   }
 
   const template = useMemo(() => {
+    if (currentRoute === ROUTES.collage) {
+      return {
+        eyebrow: 'PPTXPro',
+        title: 'Collage Maker',
+        subtext: 'Upload images in bulk, arrange them in a 2x3 or 3x3 grid, adjust margins, and export to PPTX or ZIP.',
+        masterBgUrl: '',
+        slots: [],
+        themeLabel: '',
+      }
+    }
+    if (currentRoute === ROUTES.mergePdf) {
+      return {
+        eyebrow: 'PPTXPro',
+        title: 'Merge PDF Documents',
+        subtext: 'Upload multiple PDF files to combine them into a single PDF document and check total page count.',
+        masterBgUrl: '',
+        slots: [],
+        themeLabel: '',
+      }
+    }
     if (currentRoute === ROUTES.pdf) {
       return {
         eyebrow: 'PPTXPro',
@@ -1322,7 +1347,9 @@ function App({ data }) {
       currentRoute !== ROUTES.master &&
       currentRoute !== ROUTES.extract &&
       currentRoute !== ROUTES.merge &&
-      currentRoute !== ROUTES.pdf
+      currentRoute !== ROUTES.pdf &&
+      currentRoute !== ROUTES.mergePdf &&
+      currentRoute !== ROUTES.collage
     ) {
       window.history.replaceState(null, '', ROUTES.clean)
     }
@@ -1597,61 +1624,165 @@ function App({ data }) {
     }
   }
 
+  // Shared report options builder to avoid duplication
+  const buildReportOptions = (overrides = {}) => {
+    const resolvedFirstSlideUrl =
+      currentRoute === ROUTES.dailyPlot && dailyVariant === 'rural'
+        ? template.firstSlideUrlRural
+        : template.firstSlideUrl
+    const resolvedFileName =
+      typeof template.fileName === 'function'
+        ? template.fileName(dailyVariant)
+        : template.fileName
+    const backgroundImage = template.masterBgUrl
+      ? new URL(template.masterBgUrl, window.location.href).toString()
+      : undefined
+    return {
+      fileName: resolvedFileName,
+      backgroundImage,
+      firstSlideImage: resolvedFirstSlideUrl || undefined,
+      secondSlideImage: template.secondSlideUrl || undefined,
+      lastSlideImage: template.lastSlideUrl || undefined,
+      fileNamePrefix: template.fileNamePrefix,
+      slideTitle: template.slideTitle,
+      masterTitle: template.masterTitle,
+      leftBox: template.leftBox,
+      middleBox: template.middleBox,
+      rightBox: template.rightBox,
+      dateSlide: template.dateSlide,
+      dateBox: template.dateBox,
+      dateColor: template.dateColor,
+      dateAlign: template.dateAlign,
+      dateFontSize: template.dateFontSize,
+      dateBold: template.dateBold,
+      dateFontFace: template.dateFontFace,
+      dateOffsetDays: template.dateOffsetDays,
+      textBox: template.textBox,
+      textColor: template.textColor,
+      textAlign: template.textAlign,
+      textFontSize: template.textFontSize,
+      textBold: template.textBold,
+      textDefault: template.textDefault,
+      placeholders: currentRoute === ROUTES.master ? customLayout?.placeholders : undefined,
+      textboxes: currentRoute === ROUTES.master ? customLayout?.textboxes : undefined,
+      firstSlidePlaceholders: currentRoute === ROUTES.master ? customLayout?.firstSlidePlaceholders : undefined,
+      firstSlideTextboxes: currentRoute === ROUTES.master ? customLayout?.firstSlideTextboxes : undefined,
+      firstSlideData: currentRoute === ROUTES.master ? firstSlideData : undefined,
+      lastSlidePlaceholders: currentRoute === ROUTES.master ? customLayout?.lastSlidePlaceholders : undefined,
+      lastSlideTextboxes: currentRoute === ROUTES.master ? customLayout?.lastSlideTextboxes : undefined,
+      lastSlideData: currentRoute === ROUTES.master ? lastSlideData : undefined,
+      ...overrides,
+    }
+  }
+
   const handleDownload = async () => {
     if (!canDownload) {
       return
     }
-
     try {
       setIsGenerating(true)
-      const resolvedFirstSlideUrl =
-        currentRoute === ROUTES.dailyPlot && dailyVariant === 'rural'
-          ? template.firstSlideUrlRural
-          : template.firstSlideUrl
-      const resolvedFileName =
-        typeof template.fileName === 'function'
-          ? template.fileName(dailyVariant)
-          : template.fileName
-      const backgroundImage = template.masterBgUrl
-        ? new URL(template.masterBgUrl, window.location.href).toString()
-        : undefined
-      await generateReport(pairs, {
-        fileName: resolvedFileName,
-        backgroundImage,
-        firstSlideImage: resolvedFirstSlideUrl || undefined,
-        secondSlideImage: template.secondSlideUrl || undefined,
-        lastSlideImage: template.lastSlideUrl || undefined,
-        fileNamePrefix: template.fileNamePrefix,
-        slideTitle: template.slideTitle,
-        masterTitle: template.masterTitle,
-        leftBox: template.leftBox,
-        middleBox: template.middleBox,
-        rightBox: template.rightBox,
-        dateSlide: template.dateSlide,
-        dateBox: template.dateBox,
-        dateColor: template.dateColor,
-        dateAlign: template.dateAlign,
-        dateFontSize: template.dateFontSize,
-        dateBold: template.dateBold,
-        dateFontFace: template.dateFontFace,
-        dateOffsetDays: template.dateOffsetDays,
-        textBox: template.textBox,
-        textColor: template.textColor,
-        textAlign: template.textAlign,
-        textFontSize: template.textFontSize,
-        textBold: template.textBold,
-        textDefault: template.textDefault,
-        placeholders: currentRoute === ROUTES.master ? customLayout?.placeholders : undefined,
-        textboxes: currentRoute === ROUTES.master ? customLayout?.textboxes : undefined,
-        firstSlidePlaceholders: currentRoute === ROUTES.master ? customLayout?.firstSlidePlaceholders : undefined,
-        firstSlideTextboxes: currentRoute === ROUTES.master ? customLayout?.firstSlideTextboxes : undefined,
-        firstSlideData: currentRoute === ROUTES.master ? firstSlideData : undefined,
-        lastSlidePlaceholders: currentRoute === ROUTES.master ? customLayout?.lastSlidePlaceholders : undefined,
-        lastSlideTextboxes: currentRoute === ROUTES.master ? customLayout?.lastSlideTextboxes : undefined,
-        lastSlideData: currentRoute === ROUTES.master ? lastSlideData : undefined,
-      })
+      await generateReport(pairs, buildReportOptions())
     } finally {
       setIsGenerating(false)
+    }
+  }
+
+  // ── Download completed slides only (PPTX) ──────────────────────────────
+  const [isGeneratingCompleted, setIsGeneratingCompleted] = useState(false)
+  const canDownloadCompleted = slideCount > 0 && !isGenerating && !isGeneratingCompleted && !isImporting
+
+  const handleDownloadCompleted = async () => {
+    if (!canDownloadCompleted) return
+    try {
+      setIsGeneratingCompleted(true)
+      // Build a fileName that marks the file as completed-only
+      const baseOptions = buildReportOptions()
+      const completedFileName = baseOptions.fileName
+        ? baseOptions.fileName.replace(/\.pptx$/i, '_Completed.pptx')
+        : `${template.fileNamePrefix || 'Report'}_Completed.pptx`
+      await generateCompletedSlidesReport(pairs, { ...baseOptions, fileName: completedFileName })
+    } finally {
+      setIsGeneratingCompleted(false)
+    }
+  }
+
+  // ── Export remaining images from incomplete slides as ZIP ───────────────
+  const [isExportingZip, setIsExportingZip] = useState(false)
+
+  const incompletePairsForZip = pairs.filter((pair) => {
+    if (!hasPairContent(pair, { slotKeys, requiresText })) return false
+    return !isPairComplete(pair, { slotKeys, requiresText })
+  })
+  const canExportZip = incompletePairsForZip.length > 0 && !isExportingZip && !isGenerating && !isImporting
+
+  const handleExportRemainingPics = async () => {
+    if (!canExportZip) return
+    try {
+      setIsExportingZip(true)
+      const zip = new JSZip()
+      let fileIndex = 1
+
+      for (const pair of incompletePairsForZip) {
+        // Collect all images present in this pair across all slot keys
+        for (const key of slotKeys) {
+          const imgData = pair?.[key]
+          if (!imgData || typeof imgData !== 'string') continue
+
+          let blob
+          let ext = 'jpg'
+
+          if (imgData.startsWith('data:')) {
+            // data URL → extract mime and base64
+            const mimeMatch = imgData.match(/^data:([^;]+);base64,/)
+            const mime = mimeMatch?.[1] || 'image/jpeg'
+            const b64 = imgData.replace(/^data:[^;]+;base64,/, '')
+            const byteChars = atob(b64)
+            const byteArr = new Uint8Array(byteChars.length)
+            for (let i = 0; i < byteChars.length; i++) {
+              byteArr[i] = byteChars.charCodeAt(i)
+            }
+            blob = new Blob([byteArr], { type: mime })
+            if (mime.includes('png')) ext = 'png'
+            else if (mime.includes('webp')) ext = 'webp'
+            else if (mime.includes('gif')) ext = 'gif'
+            else ext = 'jpg'
+          } else {
+            // URL — fetch the image
+            try {
+              const response = await fetch(imgData)
+              blob = await response.blob()
+              const ct = blob.type || ''
+              if (ct.includes('png')) ext = 'png'
+              else if (ct.includes('webp')) ext = 'webp'
+              else if (ct.includes('gif')) ext = 'gif'
+              else ext = 'jpg'
+            } catch {
+              // Skip images that can't be fetched
+              continue
+            }
+          }
+
+          const slotLabel = key.replace(/([A-Z])/g, '_$1').toUpperCase()
+          zip.file(`slide_${String(fileIndex).padStart(3, '0')}_${slotLabel}.${ext}`, blob)
+          fileIndex++
+        }
+      }
+
+      if (fileIndex === 1) {
+        alert('No images found in incomplete slides.')
+        return
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(zipBlob)
+      const a = document.createElement('a')
+      a.href = url
+      const prefix = template.fileNamePrefix || 'Report'
+      a.download = `${prefix}_Remaining_Pics.zip`
+      a.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setIsExportingZip(false)
     }
   }
 
@@ -1757,6 +1888,28 @@ function App({ data }) {
             >
               PDF to PPTX
             </button>
+            <button
+              type="button"
+              className={`ghost${currentRoute === ROUTES.mergePdf ? ' is-active' : ''}`}
+              onClick={() => {
+                if (currentRoute !== ROUTES.mergePdf) {
+                  window.location.pathname = ROUTES.mergePdf
+                }
+              }}
+            >
+              Merge PDF
+            </button>
+            <button
+              type="button"
+              className={`ghost${currentRoute === ROUTES.collage ? ' is-active' : ''}`}
+              onClick={() => {
+                if (currentRoute !== ROUTES.collage) {
+                  window.location.pathname = ROUTES.collage
+                }
+              }}
+            >
+              Collage Maker
+            </button>
           </div>
           {currentRoute === ROUTES.dailyPlot && (
             <div className="app__subnav">
@@ -1800,7 +1953,7 @@ function App({ data }) {
               </button>
             </div>
           )}
-          {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && currentRoute !== ROUTES.merge && currentRoute !== ROUTES.pdf && (
+          {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && currentRoute !== ROUTES.collage && currentRoute !== ROUTES.merge && currentRoute !== ROUTES.pdf && currentRoute !== ROUTES.mergePdf && (
             <>
               <div className="app__badge">Slides ready: {slideCount}</div>
               <button
@@ -1823,6 +1976,24 @@ function App({ data }) {
               />
               <button
                 type="button"
+                className="button button--completed"
+                onClick={handleDownloadCompleted}
+                disabled={!canDownloadCompleted}
+                title={`Export only the ${slideCount} complete slide(s) as PPTX`}
+              >
+                {isGeneratingCompleted ? 'Building...' : `✅ Completed (${slideCount})`}
+              </button>
+              <button
+                type="button"
+                className="button button--zip"
+                onClick={handleExportRemainingPics}
+                disabled={!canExportZip}
+                title={`Export images from ${incompletePairsForZip.length} incomplete slide(s) as ZIP`}
+              >
+                {isExportingZip ? 'Zipping...' : `📦 Remaining Pics (${incompletePairsForZip.length})`}
+              </button>
+              <button
+                type="button"
                 className="button"
                 onClick={handleDownload}
                 disabled={!canDownload}
@@ -1842,10 +2013,14 @@ function App({ data }) {
 
       {currentRoute === ROUTES.extract ? (
         <ImageExtractor />
+      ) : currentRoute === ROUTES.collage ? (
+        <CollageMaker />
       ) : currentRoute === ROUTES.merge ? (
         <PptxMerger />
       ) : currentRoute === ROUTES.pdf ? (
         <PdfToPptx />
+      ) : currentRoute === ROUTES.mergePdf ? (
+        <PdfMerger />
       ) : currentRoute === ROUTES.master && designerMode === 'design' ? (
         <MasterDesigner
           customLayout={customLayout}

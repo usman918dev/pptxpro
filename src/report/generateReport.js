@@ -220,6 +220,47 @@ const defineMaster = (
   })
 }
 
+/**
+ * generateCompletedSlidesReport – identical to generateReport but only
+ * renders slides whose every required image slot is filled (complete pairs).
+ * Incomplete pairs are excluded entirely.
+ */
+export const generateCompletedSlidesReport = async (
+  pairs,
+  options = {},
+) => {
+  const {
+    placeholders,
+    textboxes,
+  } = options
+
+  const hasMiddleBox = Boolean(options.middleBox)
+  const hasTextBox = Boolean(options.textBox)
+
+  const resolveSlideText = (pair) => {
+    if (!hasTextBox) return ''
+    const rawText = typeof pair?.slideText === 'string' ? pair.slideText.trim() : ''
+    if (rawText) return rawText
+    return typeof options.textDefault === 'string' ? options.textDefault.trim() : ''
+  }
+
+  const completedOnly = pairs.filter((pair) => {
+    if (placeholders && placeholders.length > 0) {
+      return placeholders.every((slot) => Boolean(pair?.[slot.key]))
+    }
+    const hasBefore = Boolean(pair?.beforeImage)
+    const hasAfter = Boolean(pair?.afterImage)
+    const hasMiddle = hasMiddleBox ? Boolean(pair?.middleImage) : true
+    const hasText = hasTextBox ? Boolean(resolveSlideText(pair)) : true
+    return hasBefore && hasAfter && hasMiddle && hasText
+  })
+
+  // Re-use the main function but pass only the complete pairs.
+  // We still need incomplete pairs to be empty so generateReport's own filter
+  // sees no incomplete pairs to render.
+  await generateReport(completedOnly, options)
+}
+
 export const generateReport = async (
   pairs,
   {
