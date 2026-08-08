@@ -1,14 +1,40 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { generateReport, generateCompletedSlidesReport } from './report/generateReport'
-import { importPptxSlides } from './report/importPptx'
-import JSZip from 'jszip'
-import { MasterDesigner } from './MasterDesigner'
-import { ImageExtractor } from './ImageExtractor'
-import { PptxMerger } from './PptxMerger'
-import { PdfToPptx } from './PdfToPptx'
-import { PdfMerger } from './PdfMerger'
-import { CollageMaker } from './CollageMaker'
+
+const MasterDesigner = lazy(() =>
+  import('./MasterDesigner').then((module) => ({
+    default: module.MasterDesigner,
+  })),
+)
+const ImageExtractor = lazy(() =>
+  import('./ImageExtractor').then((module) => ({
+    default: module.ImageExtractor,
+  })),
+)
+const PptxMerger = lazy(() =>
+  import('./PptxMerger').then((module) => ({
+    default: module.PptxMerger,
+  })),
+)
+const PdfToPptx = lazy(() =>
+  import('./PdfToPptx').then((module) => ({
+    default: module.PdfToPptx,
+  })),
+)
+const PdfMerger = lazy(() =>
+  import('./PdfMerger').then((module) => ({
+    default: module.PdfMerger,
+  })),
+)
+const CollageMaker = lazy(() =>
+  import('./CollageMaker').then((module) => ({
+    default: module.CollageMaker,
+  })),
+)
+
+const loadGenerateReportModule = () => import('./report/generateReport')
+const loadImportPptxModule = () => import('./report/importPptx')
+const loadJsZip = () => import('jszip').then((module) => module.default)
 
 const EMPTY_PAIR = {
   beforeImage: '',
@@ -1330,6 +1356,7 @@ function App({ data }) {
   })
   const [isGenerating, setIsGenerating] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
+  const routeFallback = <p className="app__note">Loading tool...</p>
   const [importStatus, setImportStatus] = useState({ type: 'idle', message: '' })
   const [dragIndex, setDragIndex] = useState(null)
   const [dragOverIndex, setDragOverIndex] = useState(null)
@@ -1561,6 +1588,7 @@ function App({ data }) {
       setImportStatus({ type: 'working', message: 'Importing PPTX...' })
       const skipFirstSlides = template.importSkipFirst ?? 1
       const skipLastSlides = template.importSkipLast ?? 1
+      const { importPptxSlides } = await loadImportPptxModule()
       const { pairs: importedPairs, importedSlides, emptySlides } =
         await importPptxSlides(file, {
           skipFirstSlides,
@@ -1681,6 +1709,7 @@ function App({ data }) {
     }
     try {
       setIsGenerating(true)
+      const { generateReport } = await loadGenerateReportModule()
       await generateReport(pairs, buildReportOptions())
     } finally {
       setIsGenerating(false)
@@ -1695,6 +1724,7 @@ function App({ data }) {
     if (!canDownloadCompleted) return
     try {
       setIsGeneratingCompleted(true)
+      const { generateCompletedSlidesReport } = await loadGenerateReportModule()
       // Build a fileName that marks the file as completed-only
       const baseOptions = buildReportOptions()
       const completedFileName = baseOptions.fileName
@@ -1719,6 +1749,7 @@ function App({ data }) {
     if (!canExportZip) return
     try {
       setIsExportingZip(true)
+      const JSZip = await loadJsZip()
       const zip = new JSZip()
       let fileIndex = 1
 
@@ -2012,43 +2043,55 @@ function App({ data }) {
       )}
 
       {currentRoute === ROUTES.extract ? (
-        <ImageExtractor />
+        <Suspense fallback={routeFallback}>
+          <ImageExtractor />
+        </Suspense>
       ) : currentRoute === ROUTES.collage ? (
-        <CollageMaker />
+        <Suspense fallback={routeFallback}>
+          <CollageMaker />
+        </Suspense>
       ) : currentRoute === ROUTES.merge ? (
-        <PptxMerger />
+        <Suspense fallback={routeFallback}>
+          <PptxMerger />
+        </Suspense>
       ) : currentRoute === ROUTES.pdf ? (
-        <PdfToPptx />
+        <Suspense fallback={routeFallback}>
+          <PdfToPptx />
+        </Suspense>
       ) : currentRoute === ROUTES.mergePdf ? (
-        <PdfMerger />
+        <Suspense fallback={routeFallback}>
+          <PdfMerger />
+        </Suspense>
       ) : currentRoute === ROUTES.master && designerMode === 'design' ? (
-        <MasterDesigner
-          customLayout={customLayout}
-          onSave={async (layout) => {
-            // Overwrite active preset's layout
-            if (activePresetId) {
-              const updated = masterPresets.map((p) =>
-                p.id === activePresetId ? { ...p, layout } : p
-              )
-              setMasterPresets(updated)
-              await saveMasterPresets(updated)
-              alert('Active preset updated! Switch to "Use Template" to use it.')
-              setDesignerMode('use')
-            } else {
-              // No active preset — save as new unnamed preset
-              await handleSaveNewPreset('Default', layout)
-            }
-          }}
-          presets={masterPresets}
-          activePresetId={activePresetId}
-          onSavePreset={handleSaveNewPreset}
-          onLoadPreset={handleLoadPreset}
-          onDeletePreset={handleDeletePreset}
-          onRenamePreset={handleRenamePreset}
-          onExportPreset={handleExportPreset}
-          onExportAll={handleExportAllPresets}
-          onImportPresets={handleImportPresetsFile}
-        />
+        <Suspense fallback={routeFallback}>
+          <MasterDesigner
+            customLayout={customLayout}
+            onSave={async (layout) => {
+              // Overwrite active preset's layout
+              if (activePresetId) {
+                const updated = masterPresets.map((p) =>
+                  p.id === activePresetId ? { ...p, layout } : p
+                )
+                setMasterPresets(updated)
+                await saveMasterPresets(updated)
+                alert('Active preset updated! Switch to "Use Template" to use it.')
+                setDesignerMode('use')
+              } else {
+                // No active preset - save as new unnamed preset
+                await handleSaveNewPreset('Default', layout)
+              }
+            }}
+            presets={masterPresets}
+            activePresetId={activePresetId}
+            onSavePreset={handleSaveNewPreset}
+            onLoadPreset={handleLoadPreset}
+            onDeletePreset={handleDeletePreset}
+            onRenamePreset={handleRenamePreset}
+            onExportPreset={handleExportPreset}
+            onExportAll={handleExportAllPresets}
+            onImportPresets={handleImportPresetsFile}
+          />
+        </Suspense>
       ) : (
         <>
           <section className="card card--theme">
