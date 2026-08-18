@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import Navbar from './Navbar'
 
 const MasterDesigner = lazy(() =>
   import('./MasterDesigner').then((module) => ({
@@ -31,6 +32,16 @@ const CollageMaker = lazy(() =>
     default: module.CollageMaker,
   })),
 )
+const PptxToPdfOcr = lazy(() =>
+  import('./PptxToPdfOcr').then((module) => ({
+    default: module.PptxToPdfOcr,
+  })),
+)
+const PptxEditor = lazy(() =>
+  import('./PptxEditor').then((module) => ({
+    default: module.PptxEditor,
+  })),
+)
 
 const loadGenerateReportModule = () => import('./report/generateReport')
 const loadImportPptxModule = () => import('./report/importPptx')
@@ -59,6 +70,8 @@ const ROUTES = {
   pdf: '/pdf',
   mergePdf: '/merge-pdf',
   collage: '/collage',
+  gpsPdf: '/gps-pdf',
+  pptxEditor: '/pptx-editor',
 }
 
 const STORAGE_PREFIX = 'pptxpro:slides:v1'
@@ -213,6 +226,7 @@ const buildStoredPairs = (pairs, slotKeys) => {
   }
   return pairs.map((pair) => {
     const nextPair = {
+      ...pair,
       slideText: typeof pair?.slideText === 'string' ? pair.slideText : '',
     }
     slotKeys.forEach((key) => {
@@ -222,15 +236,24 @@ const buildStoredPairs = (pairs, slotKeys) => {
   })
 }
 
+const hasPairContent = (pair, { slotKeys = [], requiresText = false } = {}) => {
+  if (!pair) {
+    return false
+  }
+  const hasImages = Array.isArray(slotKeys) && slotKeys.some((key) => Boolean(pair?.[key]))
+  const hasText = typeof pair?.slideText === 'string' && Boolean(pair.slideText.trim())
+  const hasCustomFields = Object.keys(pair).some((key) => {
+    if (key === 'slideText' || (Array.isArray(slotKeys) && slotKeys.includes(key))) return false
+    return typeof pair[key] === 'string' && Boolean(pair[key].trim())
+  })
+  return hasImages || hasText || hasCustomFields
+}
+
 const trimTrailingEmptyPairs = (pairs, { slotKeys, requiresText }) => {
   const trimmed = [...pairs]
   while (trimmed.length > 0) {
     const last = trimmed[trimmed.length - 1]
-    const hasImages = slotKeys.some((key) => Boolean(last?.[key]))
-    const hasText = requiresText
-      ? typeof last?.slideText === 'string' && last.slideText.trim()
-      : false
-    if (hasImages || hasText) {
+    if (hasPairContent(last, { slotKeys, requiresText })) {
       break
     }
     trimmed.pop()
@@ -583,13 +606,7 @@ const resolvePairsSource = ({
     template?.masterTitle === TEMPLATES[ROUTES.desilting]?.masterTitle
   const hasAnyContent = (pairs) =>
     Array.isArray(pairs) &&
-    pairs.some((pair) => {
-      const hasImages = slotKeys.some((key) => Boolean(pair?.[key]))
-      const hasText = requiresText
-        ? typeof pair?.slideText === 'string' && pair.slideText.trim()
-        : false
-      return hasImages || hasText
-    })
+    pairs.some((pair) => hasPairContent(pair, { slotKeys, requiresText }))
 
   let source = null
   if (storedPairs !== null) {
@@ -622,17 +639,6 @@ const isPairComplete = (pair, { slotKeys, requiresText }) => {
   }
   const textValue = typeof pair?.slideText === 'string' ? pair.slideText.trim() : ''
   return Boolean(textValue)
-}
-
-const hasPairContent = (pair, { slotKeys, requiresText }) => {
-  if (!pair) {
-    return false
-  }
-  const hasImages = slotKeys.some((key) => Boolean(pair?.[key]))
-  const hasText = requiresText
-    ? typeof pair?.slideText === 'string' && pair.slideText.trim()
-    : false
-  return hasImages || hasText
 }
 
 const getMovableCount = (pairs = [], { slotKeys, requiresText }) => {
@@ -1235,6 +1241,16 @@ function App({ data }) {
   }
 
   const template = useMemo(() => {
+    if (currentRoute === ROUTES.gpsPdf) {
+      return {
+        eyebrow: 'PPTXPro',
+        title: 'PPTX to PDF (GPS OCR)',
+        subtext: 'Upload any PPTX presentation. Scans the bottom 30% of each slide for GPS coordinates and builds a PDF with Google Maps links.',
+        masterBgUrl: '',
+        slots: [],
+        themeLabel: '',
+      }
+    }
     if (currentRoute === ROUTES.collage) {
       return {
         eyebrow: 'PPTXPro',
@@ -1317,6 +1333,16 @@ function App({ data }) {
         textBoxes: customLayout?.textboxes || []
       }
     }
+    if (currentRoute === ROUTES.pptxEditor) {
+      return {
+        eyebrow: 'PPTXPro',
+        title: 'PPTX Editor',
+        subtext: 'Edit basic text & image tags preserving slide structure.',
+        masterBgUrl: '',
+        slots: [],
+        themeLabel: '',
+      }
+    }
     return getTemplateForPath(window.location.pathname)
   }, [currentRoute, customLayout, masterPresets, activePresetId])
 
@@ -1376,7 +1402,9 @@ function App({ data }) {
       currentRoute !== ROUTES.merge &&
       currentRoute !== ROUTES.pdf &&
       currentRoute !== ROUTES.mergePdf &&
-      currentRoute !== ROUTES.collage
+      currentRoute !== ROUTES.collage &&
+      currentRoute !== ROUTES.gpsPdf &&
+      currentRoute !== ROUTES.pptxEditor
     ) {
       window.history.replaceState(null, '', ROUTES.clean)
     }
@@ -1823,218 +1851,76 @@ function App({ data }) {
         currentRoute === ROUTES.desilting ? ' app--desilting' : ''
       }${currentRoute === ROUTES.dailyPlot ? ' app--daily-plot' : ''}`}
     >
-      <header className="app__header">
-        <div>
-          <p className="app__eyebrow">{template.eyebrow}</p>
-          <h1>{template.title}</h1>
-          <p className="app__subtext">{template.subtext}</p>
-        </div>
-        <div className="app__actions">
-          <div className="app__nav">
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.clean ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.clean) {
-                  window.location.pathname = ROUTES.clean
-                }
-              }}
-            >
-              Clean Punjab
-            </button>
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.compliance ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.compliance) {
-                  window.location.pathname = ROUTES.compliance
-                }
-              }}
-            >
-              Compliance
-            </button>
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.desilting ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.desilting) {
-                  window.location.pathname = ROUTES.desilting
-                }
-              }}
-            >
-              Desilting
-            </button>
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.dailyPlot ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.dailyPlot) {
-                  window.location.pathname = ROUTES.dailyPlot
-                }
-              }}
-            >
-              Daily Plot
-            </button>
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.master ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.master) {
-                  window.location.pathname = ROUTES.master
-                }
-              }}
-            >
-              Master Creator
-            </button>
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.extract ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.extract) {
-                  window.location.pathname = ROUTES.extract
-                }
-              }}
-            >
-              Extract Images
-            </button>
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.merge ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.merge) {
-                  window.location.pathname = ROUTES.merge
-                }
-              }}
-            >
-              Merge Presentations
-            </button>
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.pdf ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.pdf) {
-                  window.location.pathname = ROUTES.pdf
-                }
-              }}
-            >
-              PDF to PPTX
-            </button>
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.mergePdf ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.mergePdf) {
-                  window.location.pathname = ROUTES.mergePdf
-                }
-              }}
-            >
-              Merge PDF
-            </button>
-            <button
-              type="button"
-              className={`ghost${currentRoute === ROUTES.collage ? ' is-active' : ''}`}
-              onClick={() => {
-                if (currentRoute !== ROUTES.collage) {
-                  window.location.pathname = ROUTES.collage
-                }
-              }}
-            >
-              Collage Maker
-            </button>
+      <Navbar
+        currentRoute={currentRoute}
+        dailyVariant={dailyVariant}
+        setDailyVariant={setDailyVariant}
+        designerMode={designerMode}
+        setDesignerMode={setDesignerMode}
+        customLayout={customLayout}
+        ROUTES={ROUTES}
+      />
+
+      {currentRoute !== ROUTES.pptxEditor && (
+        <header className="app__header">
+          <div>
+            <p className="app__eyebrow">{template.eyebrow}</p>
+            <h1>{template.title}</h1>
+            <p className="app__subtext">{template.subtext}</p>
           </div>
-          {currentRoute === ROUTES.dailyPlot && (
-            <div className="app__subnav">
-              <button
-                type="button"
-                className={`ghost${dailyVariant === 'urban' ? ' is-active' : ''}`}
-                onClick={() => setDailyVariant('urban')}
-              >
-                Urban
-              </button>
-              <button
-                type="button"
-                className={`ghost${dailyVariant === 'rural' ? ' is-active' : ''}`}
-                onClick={() => setDailyVariant('rural')}
-              >
-                Rural
-              </button>
-            </div>
-          )}
-          {currentRoute === ROUTES.master && (
-            <div className="app__subnav">
-              <button
-                type="button"
-                className={`ghost${designerMode === 'design' ? ' is-active' : ''}`}
-                onClick={() => setDesignerMode('design')}
-              >
-                Design Layout
-              </button>
-              <button
-                type="button"
-                className={`ghost${designerMode === 'use' ? ' is-active' : ''}`}
-                onClick={() => {
-                  if (customLayout?.placeholders?.length) {
-                    setDesignerMode('use')
-                  } else {
-                    alert('Please add at least one Image Placeholder to your master slide layout before switching!')
-                  }
-                }}
-              >
-                Use Template
-              </button>
-            </div>
-          )}
-          {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && currentRoute !== ROUTES.collage && currentRoute !== ROUTES.merge && currentRoute !== ROUTES.pdf && currentRoute !== ROUTES.mergePdf && (
-            <>
-              <div className="app__badge">Slides ready: {slideCount}</div>
-              <button
-                type="button"
-                className="button button--secondary"
-                onClick={handlePptxButtonClick}
-                disabled={isImporting}
-              >
-                {isImporting ? 'Importing...' : 'Upload PPTX'}
-              </button>
-              <button type="button" className="ghost" onClick={handleClearStored}>
-                Clear Saved
-              </button>
-              <input
-                ref={pptxInputRef}
-                className="file-input"
-                type="file"
-                accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                onChange={handlePptxUpload}
-              />
-              <button
-                type="button"
-                className="button button--completed"
-                onClick={handleDownloadCompleted}
-                disabled={!canDownloadCompleted}
-                title={`Export only the ${slideCount} complete slide(s) as PPTX`}
-              >
-                {isGeneratingCompleted ? 'Building...' : `✅ Completed (${slideCount})`}
-              </button>
-              <button
-                type="button"
-                className="button button--zip"
-                onClick={handleExportRemainingPics}
-                disabled={!canExportZip}
-                title={`Export images from ${incompletePairsForZip.length} incomplete slide(s) as ZIP`}
-              >
-                {isExportingZip ? 'Zipping...' : `📦 Remaining Pics (${incompletePairsForZip.length})`}
-              </button>
-              <button
-                type="button"
-                className="button"
-                onClick={handleDownload}
-                disabled={!canDownload}
-              >
-                {isGenerating ? 'Building PPTX...' : 'Download Report'}
-              </button>
-            </>
-          )}
-        </div>
-      </header>
+          <div className="app__actions">
+            {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && currentRoute !== ROUTES.collage && currentRoute !== ROUTES.merge && currentRoute !== ROUTES.pdf && currentRoute !== ROUTES.mergePdf && currentRoute !== ROUTES.gpsPdf && currentRoute !== ROUTES.pptxEditor && (
+              <>
+                <div className="app__badge">Slides ready: {slideCount}</div>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={handlePptxButtonClick}
+                  disabled={isImporting}
+                >
+                  {isImporting ? 'Importing...' : 'Upload PPTX'}
+                </button>
+                <button type="button" className="ghost" onClick={handleClearStored}>
+                  Clear Saved
+                </button>
+                <input
+                  ref={pptxInputRef}
+                  className="file-input"
+                  type="file"
+                  accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                  onChange={handlePptxUpload}
+                />
+                <button
+                  type="button"
+                  className="button button--completed"
+                  onClick={handleDownloadCompleted}
+                  disabled={!canDownloadCompleted}
+                  title={`Export only the ${slideCount} complete slide(s) as PPTX`}
+                >
+                  {isGeneratingCompleted ? 'Building...' : `✅ Completed (${slideCount})`}
+                </button>
+                <button
+                  type="button"
+                  className="button button--zip"
+                  onClick={handleExportRemainingPics}
+                  disabled={!canExportZip}
+                  title={`Export images from ${incompletePairsForZip.length} incomplete slide(s) as ZIP`}
+                >
+                  {isExportingZip ? 'Zipping...' : `📦 Remaining Pics (${incompletePairsForZip.length})`}
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handleDownload}
+                  disabled={!canDownload}
+                >
+                  {isGenerating ? 'Building PPTX...' : 'Download Report'}
+                </button>
+              </>
+            )}
+          </div>
+        </header>
+      )}
 
       {importStatus.message && (
         <p className={`app__note app__note--${importStatus.type}`}>
@@ -2042,7 +1928,15 @@ function App({ data }) {
         </p>
       )}
 
-      {currentRoute === ROUTES.extract ? (
+      {currentRoute === ROUTES.gpsPdf ? (
+        <Suspense fallback={routeFallback}>
+          <PptxToPdfOcr />
+        </Suspense>
+      ) : currentRoute === ROUTES.pptxEditor ? (
+        <Suspense fallback={routeFallback}>
+          <PptxEditor />
+        </Suspense>
+      ) : currentRoute === ROUTES.extract ? (
         <Suspense fallback={routeFallback}>
           <ImageExtractor />
         </Suspense>
@@ -2179,7 +2073,7 @@ function App({ data }) {
                     })
                     const statusLabel = isComplete
                       ? 'Complete'
-                      : slotKeys.some((key) => pair?.[key])
+                      : hasPairContent(pair, { slotKeys, requiresText })
                         ? 'In progress'
                         : 'Empty'
                     return (
