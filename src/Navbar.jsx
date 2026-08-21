@@ -162,10 +162,10 @@ export const TOOL_CATEGORIES = [
     tools: [
       {
         route: '/gps-pdf',
-        label: 'PPTX to GPS PDF',
+        label: 'PPTX to PDF (OCR)',
         iconName: 'MapPin',
         badge: 'NEW',
-        description: 'Convert PPTX to PDF with bottom 30% GPS OCR & Google Maps links',
+        description: 'Convert PPTX to PDF with adjustable OCR area for GPS or searchable PDF',
       },
       {
         route: '/collage',
@@ -173,6 +173,13 @@ export const TOOL_CATEGORIES = [
         iconName: 'LayoutGrid',
         badge: 'POPULAR',
         description: 'Create custom photo grids & layout collages effortlessly',
+      },
+      {
+        route: '/pptx-to-pdf',
+        label: 'PPTX to PDF',
+        iconName: 'FileDown',
+        badge: 'NEW',
+        description: 'Convert any PPTX presentation into a PDF document instantly',
       },
       {
         route: '/pdf',

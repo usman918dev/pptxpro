@@ -37,6 +37,11 @@ const PptxToPdfOcr = lazy(() =>
     default: module.PptxToPdfOcr,
   })),
 )
+const PptxToPdf = lazy(() =>
+  import('./PptxToPdf').then((module) => ({
+    default: module.PptxToPdf,
+  })),
+)
 const PptxEditor = lazy(() =>
   import('./PptxEditor').then((module) => ({
     default: module.PptxEditor,
@@ -71,6 +76,7 @@ const ROUTES = {
   mergePdf: '/merge-pdf',
   collage: '/collage',
   gpsPdf: '/gps-pdf',
+  pptxToPdf: '/pptx-to-pdf',
   pptxEditor: '/pptx-editor',
 }
 
@@ -1244,8 +1250,18 @@ function App({ data }) {
     if (currentRoute === ROUTES.gpsPdf) {
       return {
         eyebrow: 'PPTXPro',
-        title: 'PPTX to PDF (GPS OCR)',
-        subtext: 'Upload any PPTX presentation. Scans the bottom 30% of each slide for GPS coordinates and builds a PDF with Google Maps links.',
+        title: 'PPTX to PDF (OCR Studio)',
+        subtext: 'Upload any PPTX presentation or PDF document. Scans custom slide/page height from bottom for GPS coordinates or embeds a searchable/selectable text layer.',
+        masterBgUrl: '',
+        slots: [],
+        themeLabel: '',
+      }
+    }
+    if (currentRoute === ROUTES.pptxToPdf) {
+      return {
+        eyebrow: 'PPTXPro',
+        title: 'PPTX to PDF Converter',
+        subtext: 'Upload a PPTX presentation and convert every slide into a high-quality PDF document. Select slides, reorder pages, and download instantly.',
         masterBgUrl: '',
         slots: [],
         themeLabel: '',
@@ -1404,6 +1420,7 @@ function App({ data }) {
       currentRoute !== ROUTES.mergePdf &&
       currentRoute !== ROUTES.collage &&
       currentRoute !== ROUTES.gpsPdf &&
+      currentRoute !== ROUTES.pptxToPdf &&
       currentRoute !== ROUTES.pptxEditor
     ) {
       window.history.replaceState(null, '', ROUTES.clean)
@@ -1869,7 +1886,7 @@ function App({ data }) {
             <p className="app__subtext">{template.subtext}</p>
           </div>
           <div className="app__actions">
-            {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && currentRoute !== ROUTES.collage && currentRoute !== ROUTES.merge && currentRoute !== ROUTES.pdf && currentRoute !== ROUTES.mergePdf && currentRoute !== ROUTES.gpsPdf && currentRoute !== ROUTES.pptxEditor && (
+            {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && currentRoute !== ROUTES.collage && currentRoute !== ROUTES.merge && currentRoute !== ROUTES.pdf && currentRoute !== ROUTES.mergePdf && currentRoute !== ROUTES.gpsPdf && currentRoute !== ROUTES.pptxToPdf && currentRoute !== ROUTES.pptxEditor && (
               <>
                 <div className="app__badge">Slides ready: {slideCount}</div>
                 <button
@@ -1931,6 +1948,10 @@ function App({ data }) {
       {currentRoute === ROUTES.gpsPdf ? (
         <Suspense fallback={routeFallback}>
           <PptxToPdfOcr />
+        </Suspense>
+      ) : currentRoute === ROUTES.pptxToPdf ? (
+        <Suspense fallback={routeFallback}>
+          <PptxToPdf />
         </Suspense>
       ) : currentRoute === ROUTES.pptxEditor ? (
         <Suspense fallback={routeFallback}>
