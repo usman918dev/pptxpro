@@ -73,6 +73,54 @@ const normalizeTarget = (target) => {
   return `ppt/${cleaned}`
 }
 
+const isExternalRelationshipTarget = (target) =>
+  /^(https?:|mailto:|ftp:|file:|data:)/i.test(target || '')
+
+const normalizePathSegments = (parts) => {
+  const out = []
+  for (const part of parts) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (out.length > 0) out.pop()
+      continue
+    }
+    out.push(part)
+  }
+  return out
+}
+
+const resolveRelationshipTargetPath = (sourcePartPath, target) => {
+  if (!target || isExternalRelationshipTarget(target)) return ''
+
+  const targetPath = target.split('?')[0].split('#')[0]
+  if (!targetPath) return ''
+
+  if (targetPath.startsWith('/')) {
+    return normalizePathSegments(targetPath.slice(1).split('/')).join('/')
+  }
+
+  const sourceParts = sourcePartPath.split('/')
+  sourceParts.pop()
+  const merged = normalizePathSegments([...sourceParts, ...targetPath.split('/')])
+  return merged.join('/')
+}
+
+const toRelationshipTarget = (sourcePartPath, absoluteTargetPath) => {
+  const from = normalizePathSegments(sourcePartPath.split('/'))
+  from.pop() // source part directory
+  const to = normalizePathSegments(absoluteTargetPath.split('/'))
+
+  let common = 0
+  while (common < from.length && common < to.length && from[common] === to[common]) {
+    common++
+  }
+
+  const up = new Array(from.length - common).fill('..')
+  const down = to.slice(common)
+  const rel = [...up, ...down].join('/')
+  return rel || '.'
+}
+
 const getSlideRelations = async (zip, relsPath) => {
   const relsFile = zip.file(relsPath)
   if (!relsFile) {
@@ -696,6 +744,27 @@ export const mergePptxFiles = async (files, onProgress) => {
   const baseArrayBuffer = await baseFile.arrayBuffer()
   const mergedZip = await JSZip.loadAsync(baseArrayBuffer)
 
+  let baseSlideLayoutTarget = '../slideLayouts/slideLayout1.xml'
+  const baseSlidePathsForLayout = getSlidePaths(mergedZip)
+  if (baseSlidePathsForLayout.length > 0) {
+    const firstBaseSlidePath = baseSlidePathsForLayout[0]
+    const firstBaseRelsFile = mergedZip.file(getSlideRelsPath(firstBaseSlidePath))
+    if (firstBaseRelsFile) {
+      try {
+        const baseRelsDoc = parseXml(await firstBaseRelsFile.async('text'))
+        const relNodes = Array.from(baseRelsDoc.getElementsByTagName('Relationship'))
+        const layoutRel = relNodes.find((rel) =>
+          (rel.getAttribute('Type') || '').endsWith('/slideLayout'),
+        )
+        if (layoutRel?.getAttribute('Target')) {
+          baseSlideLayoutTarget = layoutRel.getAttribute('Target')
+        }
+      } catch {
+        // Fall back to default layout target if base rels cannot be parsed.
+      }
+    }
+  }
+
   // Identify and delete base slide files so we start clean
   onProgress?.('Cleaning up base slides...')
   const baseSlidePaths = getSlidePaths(mergedZip)
@@ -727,42 +796,59 @@ export const mergePptxFiles = async (files, onProgress) => {
       let relsXmlText = relsFile ? await relsFile.async('text') : null
 
       if (relsXmlText) {
-        const parser = new DOMParser()
-        const relsDoc = parser.parseFromString(relsXmlText, 'application/xml')
+        const relsDoc = parseXml(relsXmlText)
         const relsList = Array.from(relsDoc.getElementsByTagName('Relationship'))
+        const relationshipsToRemove = []
 
         for (const rel of relsList) {
           const target = rel.getAttribute('Target')
           const type = rel.getAttribute('Type')
+          const targetMode = rel.getAttribute('TargetMode')
           if (!target || !type) continue
 
-          const isInternalLayoutOrMaster =
-            type.endsWith('/slideLayout') ||
-            type.endsWith('/slideMaster') ||
-            type.endsWith('/notesLayout')
+          if (type.endsWith('/slideLayout')) {
+            rel.setAttribute('Target', baseSlideLayoutTarget)
+            continue
+          }
 
-          if (!isInternalLayoutOrMaster) {
-            const normalizedPath = normalizeTarget(target)
-            const mediaFile = zip.file(normalizedPath)
+          if (type.endsWith('/notesSlide')) {
+            // Notes parts have their own relationship trees and content-type overrides.
+            // Dropping them keeps merged output valid for PowerPoint.
+            relationshipsToRemove.push(rel)
+            continue
+          }
 
-            if (mediaFile) {
-              const parts = target.split('/')
-              const targetFilename = parts.pop()
-              const dirPath = parts.join('/') // e.g. "../media" or "../charts"
+          if (targetMode === 'External' || isExternalRelationshipTarget(target)) {
+            continue
+          }
 
-              const newTargetName = `p${fileIndex}_s${s}_${targetFilename}`
-              const newTarget = `${dirPath}/${newTargetName}`
-              const newZipPath = normalizeTarget(newTarget)
+          if (!type.endsWith('/image')) {
+            continue
+          }
 
-              // Copy file to merged zip
-              const mediaData = await mediaFile.async('arraybuffer')
-              mergedZip.file(newZipPath, mediaData)
+          const resolvedSourcePath = resolveRelationshipTargetPath(slidePath, target)
+          if (!resolvedSourcePath) continue
 
-              // Update relationship target
-              rel.setAttribute('Target', newTarget)
-            }
+          const mediaFile = zip.file(resolvedSourcePath)
+
+          if (mediaFile) {
+            const sourcePathParts = resolvedSourcePath.split('/')
+            const sourceFilename = sourcePathParts.pop()
+            const sourceDir = sourcePathParts.join('/')
+
+            const newTargetName = `p${fileIndex}_s${s}_${sourceFilename}`
+            const newZipPath = `${sourceDir}/${newTargetName}`
+
+            // Copy image file to merged zip
+            const mediaData = await mediaFile.async('arraybuffer')
+            mergedZip.file(newZipPath, mediaData)
+
+            // Relationship targets are relative to the slide part path.
+            rel.setAttribute('Target', toRelationshipTarget(slidePath, newZipPath))
           }
         }
+
+        relationshipsToRemove.forEach((rel) => rel.parentNode?.removeChild(rel))
         relsXmlText = new XMLSerializer().serializeToString(relsDoc)
       }
 

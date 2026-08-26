@@ -7,6 +7,8 @@ const DB_NAME = 'pptxpro-collage'
 const STORE_IMAGES = 'images'
 const STORE_SETTINGS = 'settings'
 const DB_VERSION = 1
+const DEFAULT_COLLAGE_OUTPUT_SIZE = 800
+const COLLAGE_OUTPUT_SIZE_OPTIONS = [600, 800, 1080, 1200, 1600]
 
 const openCollageDb = () =>
   new Promise((resolve, reject) => {
@@ -130,11 +132,18 @@ const drawImageProp = (ctx, img, x, y, w, h, mode = 'cover') => {
   ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, destX, destY, destWidth, destHeight)
 }
 
-const renderCollageToCanvas = async (images, rows, cols, spacing, fitMode, bgColor, orientation = 'portrait') => {
+const renderCollageToCanvas = async (
+  images,
+  rows,
+  cols,
+  spacing,
+  fitMode,
+  bgColor,
+  outputSize = DEFAULT_COLLAGE_OUTPUT_SIZE,
+) => {
   const canvas = document.createElement('canvas')
-  const isPortrait = orientation === 'portrait'
-  canvas.width = isPortrait ? 1440 : 1920
-  canvas.height = isPortrait ? 1920 : 1080
+  canvas.width = outputSize
+  canvas.height = outputSize
   const ctx = canvas.getContext('2d')
 
   // Background
@@ -306,7 +315,7 @@ export function CollageMaker() {
   const [gridCols, setGridCols] = useState(3)
   const [spacing, setSpacing] = useState(14)
   const [fitMode, setFitMode] = useState('stretch') // stretch, cover or contain
-  const [orientation, setOrientation] = useState('portrait') // portrait or landscape
+  const [outputSize, setOutputSize] = useState(DEFAULT_COLLAGE_OUTPUT_SIZE)
   const [bgColor, setBgColor] = useState('#ffffff')
   const [isLoading, setIsLoading] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
@@ -342,7 +351,12 @@ export function CollageMaker() {
           if (storedSettings.gridCols) setGridCols(storedSettings.gridCols)
           if (storedSettings.spacing !== undefined) setSpacing(storedSettings.spacing)
           if (storedSettings.fitMode) setFitMode(storedSettings.fitMode)
-          if (storedSettings.orientation) setOrientation(storedSettings.orientation)
+          if (storedSettings.outputSize) {
+            const parsedSize = Number(storedSettings.outputSize)
+            if (COLLAGE_OUTPUT_SIZE_OPTIONS.includes(parsedSize)) {
+              setOutputSize(parsedSize)
+            }
+          }
           if (storedSettings.bgColor) setBgColor(storedSettings.bgColor)
         }
       } catch (err) {
@@ -435,9 +449,10 @@ export function CollageMaker() {
     void saveState(null, { fitMode: mode })
   }
 
-  const handleOrientationChange = (orient) => {
-    setOrientation(orient)
-    void saveState(null, { orientation: orient })
+  const handleOutputSizeChange = (size) => {
+    if (!COLLAGE_OUTPUT_SIZE_OPTIONS.includes(size)) return
+    setOutputSize(size)
+    void saveState(null, { outputSize: size })
   }
 
   const handleBgColorChange = (color) => {
@@ -498,7 +513,7 @@ export function CollageMaker() {
           spacing,
           fitMode,
           bgColor,
-          orientation
+          outputSize,
         )
 
         const jpegUrl = canvas.toDataURL('image/jpeg', 0.92)
@@ -537,14 +552,8 @@ export function CollageMaker() {
       setStatus({ type: 'working', message: 'Generating PowerPoint slides...' })
 
       const pptx = new PptxGenJS()
-      const isPortrait = orientation === 'portrait'
-      
-      if (isPortrait) {
-        pptx.defineLayout({ name: 'PORTRAIT_3_4', width: 7.5, height: 10.0 })
-        pptx.layout = 'PORTRAIT_3_4'
-      } else {
-        pptx.layout = 'LAYOUT_WIDE'
-      }
+      pptx.defineLayout({ name: 'COLLAGE_SQUARE_1_1', width: 8, height: 8 })
+      pptx.layout = 'COLLAGE_SQUARE_1_1'
 
       const d = new Date()
       const dateStr = `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`
@@ -564,7 +573,7 @@ export function CollageMaker() {
           spacing,
           fitMode,
           bgColor,
-          orientation
+          outputSize,
         )
 
         const jpegUrl = canvas.toDataURL('image/jpeg', 0.90)
@@ -575,8 +584,8 @@ export function CollageMaker() {
           data: jpegUrl,
           x: 0,
           y: 0,
-          w: isPortrait ? 7.5 : 13.333,
-          h: isPortrait ? 10.0 : 7.5,
+          w: 8,
+          h: 8,
         })
       }
 
@@ -661,25 +670,23 @@ export function CollageMaker() {
             </div>
 
             <div className="collage-controls__section">
-              <p className="label">Page Orientation</p>
+              <p className="label">Output Image Size</p>
               <div className="collage-controls__presets">
-                <button
-                  type="button"
-                  className={`ghost ${orientation === 'portrait' ? 'is-active' : ''}`}
-                  onClick={() => handleOrientationChange('portrait')}
-                  disabled={isExporting}
-                >
-                  Portrait (3:4)
-                </button>
-                <button
-                  type="button"
-                  className={`ghost ${orientation === 'landscape' ? 'is-active' : ''}`}
-                  onClick={() => handleOrientationChange('landscape')}
-                  disabled={isExporting}
-                >
-                  Landscape (16:9)
-                </button>
+                {COLLAGE_OUTPUT_SIZE_OPTIONS.map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    className={`ghost ${outputSize === size ? 'is-active' : ''}`}
+                    onClick={() => handleOutputSizeChange(size)}
+                    disabled={isExporting}
+                  >
+                    {size} x {size}
+                  </button>
+                ))}
               </div>
+              <span className="collage-controls__hint">
+                Applies to both ZIP images and PPTX slide image quality.
+              </span>
             </div>
 
             <div className="collage-controls__section">
@@ -807,7 +814,7 @@ export function CollageMaker() {
             {activeTab === 'preview' ? (
               <div className="collage-previews">
                 <p className="collage-maker__hint">
-                  Showing {orientation === 'portrait' ? '3:4 portrait' : '16:9 widescreen'} layout previews. Spacing adjusts the padding around and between grid items.
+                  Showing square output preview at {outputSize} x {outputSize}. Spacing adjusts the padding around and between grid items.
                 </p>
                 <div className="collage-slides-grid">
                   {collageSlides.map((slideImages, slideIndex) => (
@@ -824,7 +831,7 @@ export function CollageMaker() {
                         className="collage-slide-canvas" 
                         style={{ 
                           backgroundColor: bgColor,
-                          aspectRatio: orientation === 'portrait' ? '3 / 4' : '16 / 9'
+                          aspectRatio: '1 / 1'
                         }}
                       >
                         <div 
