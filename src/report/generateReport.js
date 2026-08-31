@@ -258,7 +258,7 @@ export const generateCompletedSlidesReport = async (
   // Re-use the main function but pass only the complete pairs.
   // We still need incomplete pairs to be empty so generateReport's own filter
   // sees no incomplete pairs to render.
-  await generateReport(completedOnly, options)
+  return generateReport(completedOnly, options)
 }
 
 export const generateReport = async (
@@ -706,5 +706,6 @@ export const generateReport = async (
   const safeFileName =
     fileName || `${fileNamePrefix || FILE_NAME_PREFIX}-${fileDate}.pptx`
 
-  await pptx.writeFile({ fileName: safeFileName })
+  const blob = await pptx.write({ outputType: 'blob' })
+  return { blob, fileName: safeFileName }
 }

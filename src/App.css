@@ -304,6 +304,24 @@
   container-type: inline-size;
 }
 
+/* Imported first/last slide preview: full-bleed background like a real PPTX slide */
+.imported-slide-canvas {
+  background-size: cover;
+  background-color: #1a1a2e;
+  border: 2px solid rgba(124, 58, 237, 0.35);
+  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.12);
+}
+
+/* Show "Replace" hint on hover over image slots */
+.imported-slide-canvas div:hover .ise-img-hint {
+  opacity: 1 !important;
+}
+
+.imported-slide-editor .pair__header {
+  gap: 12px;
+}
+
+
 .slide-text {
   position: absolute;
   display: flex;

@@ -1,0 +1,17 @@
+{
+  "short_name": "PPTXPro Studio",
+  "name": "PPTXPro - Web PowerPoint Studio",
+  "description": "Professional Web PowerPoint Editor with offline support and direct local file save.",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "display": "standalone",
+  "orientation": "any"
+}

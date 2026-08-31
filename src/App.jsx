@@ -1,6 +1,35 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import Navbar from './Navbar'
+import { ImportedSlideEditor } from './ImportedSlideEditor'
+import { SlideCanvas } from './components/SlideCanvas'
+import { PairCard } from './components/PairCard'
+import { ROUTES, normalizeRoute } from './config/routes'
+import { TEMPLATES, getTemplateForPath } from './config/templates'
+import {
+  buildStorageKey,
+  canUseStorage,
+  loadPairsFromDb,
+  savePairsToDb,
+  removePairsFromDb,
+  loadStoredPairsSync,
+  loadStoredPairs,
+  savePairsToStorage,
+  loadMasterPresets,
+  saveMasterPresets,
+  loadActivePresetId,
+  saveActivePresetId,
+  migrateLegacyLayout,
+} from './utils/storage'
+import {
+  buildEmptyPair,
+  resolvePairsSource,
+  isPairComplete,
+  getMovableCount,
+  normalizePairs,
+  hasPairContent,
+  trimTrailingEmptyPairs,
+} from './utils/pairUtils'
 
 const MasterDesigner = lazy(() =>
   import('./MasterDesigner').then((module) => ({
@@ -52,990 +81,6 @@ const loadGenerateReportModule = () => import('./report/generateReport')
 const loadImportPptxModule = () => import('./report/importPptx')
 const loadJsZip = () => import('jszip').then((module) => module.default)
 
-const EMPTY_PAIR = {
-  beforeImage: '',
-  middleImage: '',
-  afterImage: '',
-  slideText: '',
-}
-
-const normalizeRoute = (path = '/') => {
-  const trimmed = path.replace(/\/+$/, '')
-  return trimmed === '' ? '/' : trimmed
-}
-
-const ROUTES = {
-  clean: '/',
-  compliance: '/compliance',
-  desilting: '/desilting',
-  dailyPlot: '/daily-plot',
-  master: '/master',
-  extract: '/extract',
-  merge: '/merge',
-  pdf: '/pdf',
-  mergePdf: '/merge-pdf',
-  collage: '/collage',
-  gpsPdf: '/gps-pdf',
-  pptxToPdf: '/pptx-to-pdf',
-  pptxEditor: '/pptx-editor',
-}
-
-const STORAGE_PREFIX = 'pptxpro:slides:v1'
-const DB_NAME = 'pptxpro-slides'
-const DB_STORE = 'pairs'
-const DB_VERSION = 1
-
-// Master preset DB keys
-const MASTER_PRESETS_KEY = 'pptxpro:master-presets'
-const MASTER_ACTIVE_KEY = 'pptxpro:master-active-preset-id'
-const MASTER_LEGACY_KEY = 'pptxpro:custom-master-layout'
-
-const buildStorageKey = (route, variant = '') => {
-  const normalizedRoute = normalizeRoute(route)
-  const resolvedVariant =
-    normalizedRoute === ROUTES.dailyPlot ? variant || 'urban' : 'default'
-  return `${STORAGE_PREFIX}:${normalizedRoute}:${resolvedVariant}`
-}
-
-const canUseStorage = () => {
-  try {
-    return typeof window !== 'undefined' && Boolean(window.localStorage)
-  } catch {
-    return false
-  }
-}
-
-const canUseIndexedDb = () => {
-  try {
-    return typeof window !== 'undefined' && Boolean(window.indexedDB)
-  } catch {
-    return false
-  }
-}
-
-const openPairsDb = () =>
-  new Promise((resolve, reject) => {
-    if (!canUseIndexedDb()) {
-      resolve(null)
-      return
-    }
-    const request = window.indexedDB.open(DB_NAME, DB_VERSION)
-    request.onupgradeneeded = () => {
-      const db = request.result
-      if (!db.objectStoreNames.contains(DB_STORE)) {
-        db.createObjectStore(DB_STORE)
-      }
-    }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-
-const loadPairsFromDb = async (storageKey) => {
-  if (!storageKey || !canUseIndexedDb()) {
-    return null
-  }
-  try {
-    const db = await openPairsDb()
-    if (!db) {
-      return null
-    }
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction(DB_STORE, 'readonly')
-      const store = tx.objectStore(DB_STORE)
-      const request = store.get(storageKey)
-      request.onsuccess = () => resolve(request.result ?? null)
-      request.onerror = () => reject(request.error)
-      tx.oncomplete = () => db.close()
-    })
-  } catch {
-    return null
-  }
-}
-
-const savePairsToDb = async (storageKey, pairs) => {
-  if (!storageKey || !canUseIndexedDb()) {
-    return
-  }
-  try {
-    const db = await openPairsDb()
-    if (!db) {
-      return
-    }
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(DB_STORE, 'readwrite')
-      const store = tx.objectStore(DB_STORE)
-      store.put(pairs, storageKey)
-      tx.oncomplete = () => {
-        db.close()
-        resolve()
-      }
-      tx.onerror = () => {
-        db.close()
-        reject(tx.error)
-      }
-    })
-  } catch {
-    // Ignore storage errors.
-  }
-}
-
-const removePairsFromDb = async (storageKey) => {
-  if (!storageKey || !canUseIndexedDb()) {
-    return
-  }
-  try {
-    const db = await openPairsDb()
-    if (!db) {
-      return
-    }
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(DB_STORE, 'readwrite')
-      const store = tx.objectStore(DB_STORE)
-      store.delete(storageKey)
-      tx.oncomplete = () => {
-        db.close()
-        resolve()
-      }
-      tx.onerror = () => {
-        db.close()
-        reject(tx.error)
-      }
-    })
-  } catch {
-    // Ignore storage errors.
-  }
-}
-
-const loadStoredPairsSync = (storageKey) => {
-  if (!storageKey || !canUseStorage()) {
-    return null
-  }
-  try {
-    const raw = window.localStorage.getItem(storageKey)
-    if (!raw) {
-      return null
-    }
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-const loadStoredPairs = async (storageKey) => {
-  return await loadPairsFromDb(storageKey)
-}
-
-const buildStoredPairs = (pairs, slotKeys) => {
-  if (!Array.isArray(pairs)) {
-    return []
-  }
-  return pairs.map((pair) => {
-    const nextPair = {
-      ...pair,
-      slideText: typeof pair?.slideText === 'string' ? pair.slideText : '',
-    }
-    slotKeys.forEach((key) => {
-      nextPair[key] = typeof pair?.[key] === 'string' ? pair[key] : ''
-    })
-    return nextPair
-  })
-}
-
-const hasPairContent = (pair, { slotKeys = [], requiresText = false } = {}) => {
-  if (!pair) {
-    return false
-  }
-  const hasImages = Array.isArray(slotKeys) && slotKeys.some((key) => Boolean(pair?.[key]))
-  const hasText = typeof pair?.slideText === 'string' && Boolean(pair.slideText.trim())
-  const hasCustomFields = Object.keys(pair).some((key) => {
-    if (key === 'slideText' || (Array.isArray(slotKeys) && slotKeys.includes(key))) return false
-    return typeof pair[key] === 'string' && Boolean(pair[key].trim())
-  })
-  return hasImages || hasText || hasCustomFields
-}
-
-const trimTrailingEmptyPairs = (pairs, { slotKeys, requiresText }) => {
-  const trimmed = [...pairs]
-  while (trimmed.length > 0) {
-    const last = trimmed[trimmed.length - 1]
-    if (hasPairContent(last, { slotKeys, requiresText })) {
-      break
-    }
-    trimmed.pop()
-  }
-  return trimmed
-}
-
-const savePairsToStorage = (storageKey, pairs, { slotKeys, requiresText }) => {
-  if (!storageKey) {
-    return
-  }
-  try {
-    const prepared = buildStoredPairs(pairs, slotKeys)
-    const trimmed = trimTrailingEmptyPairs(prepared, { slotKeys, requiresText })
-    if (trimmed.length === 0) {
-      void removePairsFromDb(storageKey)
-      return
-    }
-    void savePairsToDb(storageKey, trimmed)
-  } catch {
-    // Ignore storage errors.
-  }
-}
-
-const DEFAULT_SLOTS = [
-  {
-    key: 'beforeImage',
-    label: 'Before',
-    className: 'slide-slot slide-slot--before',
-    urlMode: 'prompt',
-  },
-  {
-    key: 'afterImage',
-    label: 'After',
-    className: 'slide-slot slide-slot--after',
-    urlMode: 'prompt',
-  },
-]
-
-const DESILTING_PRESET_TEXT = [
-  'UC-55',
-  'UC-56',
-  'UC-57',
-  'UC-58',
-  'UC-59',
-  'UC-60',
-  'UC-61',
-  'UC-62',
-  'UC-63',
-  'UC-64',
-  'UC-65',
-  'UC-66',
-  'UC-67',
-  'UC-68',
-  'UC-69',
-  'Sector-1',
-  'Sector-2',
-  'Sector-3',
-  'Sector-4',
-  'Sector-5',
-  'Sector-6',
-  'Sector-7',
-  'Sector-8',
-  'Sector-9',
-  'Sector-10',
-]
-
-const getDateOffset = (offsetDays = 0) => {
-  const date = new Date()
-  date.setDate(date.getDate() + offsetDays)
-  return date
-}
-
-const formatDailyPlotDate = (date) => {
-  const day = String(date.getDate()).padStart(2, '0')
-  const monthNames = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ]
-  const month = monthNames[date.getMonth()]
-  const year = date.getFullYear()
-  return `${day}_${month}_${year}`
-}
-
-const buildDailyPlotFileName = (variant = 'urban') => {
-  const dateLabel = formatDailyPlotDate(getDateOffset(-1))
-  const suffix = variant === 'rural' ? 'Rural' : 'Urban'
-  return `Daily_Plot's_Clearance_Report_${suffix} ${dateLabel}.pptx`
-}
-
-const TEMPLATES = {
-  [ROUTES.clean]: {
-    eyebrow: 'Clean Punjab',
-    title: 'Plots Cleaning-Activity',
-    subtext:
-      'Drop a Before and After image. A new row appears automatically and the page scrolls to it.',
-    masterBgUrl: '/master-slide.png',
-    firstSlideUrl: '/first-slide.jpeg',
-    secondSlideUrl: '',
-    lastSlideUrl: '/last-slide.jpeg',
-    fileNamePrefix: 'Plots  Cleaning-Activity_Tehsil Kamoke',
-    masterTitle: 'CLEAN_PUNJAB_MASTER',
-    slideTitle: 'Plots Cleaning-Activity',
-    themeLabel: 'Master slide theme',
-    importSkipFirst: 1,
-    importSkipLast: 1,
-    imageCount: 2,
-    slots: DEFAULT_SLOTS,
-  },
-  [ROUTES.compliance]: {
-    eyebrow: 'Suthra Punjab',
-    title: 'Compliance Report',
-    subtext:
-      'Drop Before and After images. A new row appears automatically and the page scrolls to it.',
-    masterBgUrl: '/master-slide-2.png',
-    firstSlideUrl: '/slide-first-2.png',
-    secondSlideUrl: '/slide-second-2.png',
-    lastSlideUrl: '/last-slide-2.png',
-    fileNamePrefix: 'Compliance Report_Tehsil Kamoke',
-    masterTitle: 'COMPLIANCE_MASTER',
-    slideTitle: 'Compliance Report',
-    themeLabel: 'Compliance master slide theme',
-    leftBox: { x: 0.4, y: 1.5, w: 6.0, h: 4.65 },
-    rightBox: { x: 6.93, y: 1.5, w: 6.0, h: 4.65 },
-    dateSlide: 'second',
-    dateBox: { x: 5.07, y: 4.91, w: 3.2, h: 0.4 },
-    dateColor: 'FFD54D',
-    dateAlign: 'center',
-    dateFontSize: 22,
-    dateBold: true,
-    importSkipFirst: 2,
-    importSkipLast: 1,
-    imageCount: 2,
-    slots: DEFAULT_SLOTS,
-  },
-  [ROUTES.desilting]: {
-    eyebrow: 'Suthra Punjab',
-    title: 'Desilting Report',
-    subtext:
-      'Drop three images for each slide and add the sector text. A new row appears automatically and the page scrolls to it.',
-    masterBgUrl: '/master-slide-3.png',
-    firstSlideUrl: '/first-slide-3.png',
-    secondSlideUrl: '',
-    lastSlideUrl: '/last-slide-3.png',
-    fileNamePrefix: 'Desilting Report_Tehsil Kamoke',
-    masterTitle: 'DESILTING_MASTER',
-    slideTitle: 'Desilting Report',
-    themeLabel: 'Desilting master slide theme',
-    leftBox: { x: 0.16, y: 1.9, w: 4.27, h: 4.975 },
-    middleBox: { x: 4.533, y: 1.9, w: 4.27, h: 4.975 },
-    rightBox: { x: 8.88, y: 1.9, w: 4.27, h: 4.975 },
-    textBox: { x: 4.0, y: 0.88, w: 5.33, h: 0.5 },
-    textColor: '111111',
-    textAlign: 'center',
-    textFontSize: 22,
-    textBold: true,
-    textDefault: '',
-    textLabel: 'Sector text',
-    importSkipFirst: 1,
-    importSkipLast: 1,
-    imageCount: 3,
-    slots: [
-      {
-        key: 'beforeImage',
-        label: 'Before',
-        className: 'slide-slot slide-slot--before',
-        urlMode: 'prompt',
-      },
-      {
-        key: 'middleImage',
-        label: 'During',
-        className: 'slide-slot slide-slot--middle',
-        urlMode: 'prompt',
-      },
-      {
-        key: 'afterImage',
-        label: 'After',
-        className: 'slide-slot slide-slot--after',
-        urlMode: 'prompt',
-      },
-    ],
-  },
-  [ROUTES.dailyPlot]: {
-    eyebrow: 'Daily Plot',
-    title: 'OTC Plot Report',
-    subtext:
-      'Drop a Before and After image. A new row appears automatically and the page scrolls to it.',
-    masterBgUrl: '/master-slide-4.png',
-    firstSlideUrl: '/first-slide-4-urban.png',
-    firstSlideUrlRural: '/first-slide-4-rural.png',
-    secondSlideUrl: '',
-    lastSlideUrl: '/last-slide-4.png',
-    fileName: buildDailyPlotFileName,
-    masterTitle: 'DAILY_PLOT_MASTER',
-    slideTitle: 'OTC Plot Report',
-    themeLabel: 'Daily plot master slide theme',
-    leftBox: { x: 1.0, y: 2.16, w: 5.47, h: 4.05 },
-    rightBox: { x: 6.8, y: 2.16, w: 5.47, h: 4.05 },
-    dateBox: { x: 5.80, y: 2.25, w: 2.4, h: 0.4 },
-    dateAlign: 'center',
-    dateColor: '000000',
-    dateFontSize: 20,
-    dateFontFace: 'Times New Roman',
-    dateSlide: 'first',
-    dateOffsetDays: -1,
-    importSkipFirst: 1,
-    importSkipLast: 1,
-    imageCount: 2,
-    slots: DEFAULT_SLOTS,
-  },
-}
-
-// ── Master Preset helpers ────────────────────────────────────────────────────
-
-const loadMasterPresets = async () => {
-  try {
-    const data = await loadPairsFromDb(MASTER_PRESETS_KEY)
-    return Array.isArray(data) ? data : []
-  } catch {
-    return []
-  }
-}
-
-const saveMasterPresets = async (presets) => {
-  try {
-    await savePairsToDb(MASTER_PRESETS_KEY, presets)
-  } catch {
-    // Ignore
-  }
-}
-
-const loadActivePresetId = async () => {
-  try {
-    const id = await loadPairsFromDb(MASTER_ACTIVE_KEY)
-    return typeof id === 'string' ? id : null
-  } catch {
-    return null
-  }
-}
-
-const saveActivePresetId = async (id) => {
-  try {
-    if (id) {
-      await savePairsToDb(MASTER_ACTIVE_KEY, id)
-    } else {
-      await removePairsFromDb(MASTER_ACTIVE_KEY)
-    }
-  } catch {
-    // Ignore
-  }
-}
-
-// Migrate old single layout to preset system (runs once)
-const migrateLegacyLayout = async (presets) => {
-  try {
-    const legacy = await loadPairsFromDb(MASTER_LEGACY_KEY)
-    if (legacy && typeof legacy === 'object') {
-      const already = presets.some((p) => p._migrated)
-      if (!already) {
-        const newPreset = {
-          id: `preset_migrated_${Date.now()}`,
-          name: 'Default',
-          createdAt: Date.now(),
-          _migrated: true,
-          layout: legacy,
-        }
-        return [newPreset, ...presets]
-      }
-    }
-  } catch {
-    // Ignore
-  }
-  return null // no migration needed
-}
-
-const getTemplateForPath = (path) => {
-  const normalized = normalizeRoute(path)
-  return TEMPLATES[normalized] || TEMPLATES[ROUTES.clean]
-}
-
-
-const buildEmptyPair = (slotKeys, textDefault = '') => {
-  const emptyPair = {
-    ...EMPTY_PAIR,
-    slideText: textDefault,
-  }
-  slotKeys.forEach((key) => {
-    emptyPair[key] = ''
-  })
-  return emptyPair
-}
-
-const buildPresetPairs = (template, { slotKeys, textDefault }) => {
-  if (template?.masterTitle !== TEMPLATES[ROUTES.desilting]?.masterTitle) {
-    return null
-  }
-  const base = buildEmptyPair(slotKeys, textDefault)
-  const presets = DESILTING_PRESET_TEXT.map((label) => ({
-    ...base,
-    slideText: label,
-  }))
-  return presets
-}
-
-const mergeDesiltingPresetPairs = (pairs, { slotKeys, textDefault }) => {
-  const base = buildEmptyPair(slotKeys, textDefault)
-  const existing = Array.isArray(pairs) ? pairs : []
-  const next = DESILTING_PRESET_TEXT.map((label, index) => {
-    const pair = existing[index] || base
-    const hasText =
-      typeof pair?.slideText === 'string' && pair.slideText.trim()
-    return {
-      ...base,
-      ...pair,
-      slideText: hasText ? pair.slideText : label,
-    }
-  })
-
-  if (existing.length > DESILTING_PRESET_TEXT.length) {
-    next.push(
-      ...existing
-        .slice(DESILTING_PRESET_TEXT.length)
-        .filter(Boolean)
-        .map((pair) => ({ ...base, ...pair })),
-    )
-  }
-
-  return next
-}
-
-const resolvePairsSource = ({
-  storedPairs,
-  data,
-  template,
-  slotKeys,
-  textDefault,
-  requiresText,
-}) => {
-  const isDesilting =
-    template?.masterTitle === TEMPLATES[ROUTES.desilting]?.masterTitle
-  const hasAnyContent = (pairs) =>
-    Array.isArray(pairs) &&
-    pairs.some((pair) => hasPairContent(pair, { slotKeys, requiresText }))
-
-  let source = null
-  if (storedPairs !== null) {
-    if (!isDesilting || hasAnyContent(storedPairs)) {
-      source = storedPairs
-    }
-  }
-  if (!source && Array.isArray(data) && data.length > 0) {
-    source = data
-  }
-  if (!source) {
-    const presetPairs = buildPresetPairs(template, { slotKeys, textDefault })
-    source = presetPairs || []
-  }
-  return isDesilting
-    ? mergeDesiltingPresetPairs(source, { slotKeys, textDefault })
-    : source
-}
-
-const isPairComplete = (pair, { slotKeys, requiresText }) => {
-  if (!pair) {
-    return false
-  }
-  const hasAllImages = slotKeys.every((key) => Boolean(pair?.[key]))
-  if (!hasAllImages) {
-    return false
-  }
-  if (!requiresText) {
-    return true
-  }
-  const textValue = typeof pair?.slideText === 'string' ? pair.slideText.trim() : ''
-  return Boolean(textValue)
-}
-
-const getMovableCount = (pairs = [], { slotKeys, requiresText }) => {
-  if (!Array.isArray(pairs) || pairs.length === 0) {
-    return 0
-  }
-  const lastIndex = pairs.length - 1
-  const lastIsEmpty =
-    lastIndex >= 0 &&
-    !hasPairContent(pairs[lastIndex], { slotKeys, requiresText })
-  return lastIsEmpty ? lastIndex : pairs.length
-}
-
-const normalizePairs = (
-  items = [],
-  { slotKeys = ['beforeImage', 'afterImage'], requiresText = false, textDefault = '' } = {},
-) => {
-  const emptyPair = buildEmptyPair(slotKeys, textDefault)
-  const basePairs = items
-    .filter(Boolean)
-    .map((pair) => {
-      const migratedPair = { ...pair }
-      Object.keys(pair).forEach((key) => {
-        if (key.startsWith('image_image_')) {
-          const newKey = key.replace('image_image_', 'image_')
-          migratedPair[newKey] = pair[key]
-        }
-        if (key.startsWith('text_text_')) {
-          const newKey = key.replace('text_text_', 'text_')
-          migratedPair[newKey] = pair[key]
-        }
-        if (key.startsWith('first_image_image_')) {
-          const newKey = key.replace('first_image_image_', 'first_image_')
-          migratedPair[newKey] = pair[key]
-        }
-        if (key.startsWith('first_text_text_')) {
-          const newKey = key.replace('first_text_text_', 'first_text_')
-          migratedPair[newKey] = pair[key]
-        }
-        if (key.startsWith('last_image_image_')) {
-          const newKey = key.replace('last_image_image_', 'last_image_')
-          migratedPair[newKey] = pair[key]
-        }
-        if (key.startsWith('last_text_text_')) {
-          const newKey = key.replace('last_text_text_', 'last_text_')
-          migratedPair[newKey] = pair[key]
-        }
-      })
-      return {
-        ...emptyPair,
-        ...migratedPair,
-        slideText:
-          typeof pair?.slideText === 'string' ? pair.slideText : textDefault,
-      }
-    })
-
-  if (basePairs.length === 0) {
-    return [{ ...emptyPair }]
-  }
-
-  const lastPair = basePairs[basePairs.length - 1]
-  if (isPairComplete(lastPair, { slotKeys, requiresText })) {
-    basePairs.push({ ...emptyPair })
-  }
-
-  return basePairs
-}
-
-const readFileAsDataUrl = (file) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result)
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
-
-const UNDO_DURATION_MS = 5000
-
-function DropSlot({ label, value, onChange, className = '', urlMode = 'inline', style }) {
-  const [isDragging, setIsDragging] = useState(false)
-  const [urlInput, setUrlInput] = useState('')
-  const [pendingDelete, setPendingDelete] = useState(null) // stores the image url pending deletion
-  const [undoProgress, setUndoProgress] = useState(100) // 100 → 0 countdown
-  const fileInputRef = useRef(null)
-  const undoTimerRef = useRef(null)
-  const undoRafRef = useRef(null)
-
-  const clearUndoTimer = () => {
-    if (undoTimerRef.current) {
-      clearTimeout(undoTimerRef.current)
-      undoTimerRef.current = null
-    }
-    if (undoRafRef.current) {
-      cancelAnimationFrame(undoRafRef.current)
-      undoRafRef.current = null
-    }
-  }
-
-  const commitDelete = (imageUrl) => {
-    clearUndoTimer()
-    setPendingDelete(null)
-    setUndoProgress(100)
-    onChange('')
-  }
-
-  const handleDeleteClick = () => {
-    clearUndoTimer()
-    const imageToDelete = value
-    setPendingDelete(imageToDelete)
-    setUndoProgress(100)
-
-    // Animate the countdown ring
-    const startTime = performance.now()
-    const tick = (now) => {
-      const elapsed = now - startTime
-      const remaining = Math.max(0, 100 - (elapsed / UNDO_DURATION_MS) * 100)
-      setUndoProgress(remaining)
-      if (remaining > 0) {
-        undoRafRef.current = requestAnimationFrame(tick)
-      }
-    }
-    undoRafRef.current = requestAnimationFrame(tick)
-
-    undoTimerRef.current = setTimeout(() => {
-      commitDelete(imageToDelete)
-    }, UNDO_DURATION_MS)
-  }
-
-  const handleUndo = () => {
-    clearUndoTimer()
-    setPendingDelete(null)
-    setUndoProgress(100)
-    // value is already set (we never called onChange) so nothing more needed
-  }
-
-  const handleFile = async (file) => {
-    if (!file) {
-      return
-    }
-    clearUndoTimer()
-    setPendingDelete(null)
-    const dataUrl = await readFileAsDataUrl(file)
-    onChange(dataUrl)
-  }
-
-  const handleDrop = (event) => {
-    event.preventDefault()
-    setIsDragging(false)
-    const file = event.dataTransfer.files?.[0]
-    if (file) {
-      handleFile(file)
-    }
-  }
-
-  const handleDragOver = (event) => {
-    event.preventDefault()
-  }
-
-  const handleDragEnter = (event) => {
-    event.preventDefault()
-    setIsDragging(true)
-  }
-
-  const handleDragLeave = () => {
-    setIsDragging(false)
-  }
-
-  const handleBrowse = (event) => {
-    const file = event.target.files?.[0]
-    if (file) {
-      handleFile(file)
-    }
-    event.target.value = ''
-  }
-
-  const handleUrlAdd = (nextUrl) => {
-    const trimmed = (nextUrl ?? urlInput).trim()
-    if (!trimmed) {
-      return
-    }
-    clearUndoTimer()
-    setPendingDelete(null)
-    onChange(trimmed)
-    if (nextUrl === undefined) {
-      setUrlInput('')
-    }
-  }
-
-  const handleUrlPrompt = () => {
-    const response = window.prompt('Paste image URL')
-    if (response) {
-      handleUrlAdd(response)
-    }
-  }
-
-  const handleUrlKeyDown = (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      handleUrlAdd()
-    }
-  }
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => clearUndoTimer()
-  }, [])
-
-  // Determine what image to show: if pending delete, show the pending image (greyed)
-  const displayValue = pendingDelete !== null ? pendingDelete : value
-  const isPendingDelete = pendingDelete !== null
-  const slotClassName = `drop-slot${displayValue ? ' has-image' : ''}${
-    isDragging ? ' is-dragging' : ''
-  }${isPendingDelete ? ' is-pending-delete' : ''} ${className}`
-
-  // SVG ring circumference for the countdown
-  const RING_R = 14
-  const RING_CIRC = 2 * Math.PI * RING_R
-  const ringDash = (undoProgress / 100) * RING_CIRC
-
-  return (
-    <div
-      className={slotClassName.trim()}
-      onDrop={handleDrop}
-      onDragOver={handleDragOver}
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      style={style}
-    >
-      <div className="drop-slot__label">{label}</div>
-      {displayValue ? (
-        <div className="drop-slot__preview-wrap">
-          <img
-            className={`drop-slot__preview${isPendingDelete ? ' is-fading' : ''}`}
-            src={displayValue}
-            alt={`${label} preview`}
-            style={style?.borderRadius !== undefined ? { borderRadius: style.borderRadius } : {}}
-          />
-          {isPendingDelete ? (
-            <button
-              type="button"
-              className="drop-slot__undo"
-              onClick={handleUndo}
-              aria-label={`Undo remove ${label} image`}
-            >
-              <svg className="drop-slot__undo-ring" viewBox="0 0 36 36" aria-hidden="true">
-                <circle
-                  cx="18" cy="18" r={RING_R}
-                  fill="none"
-                  stroke="rgba(255,255,255,0.25)"
-                  strokeWidth="3"
-                />
-                <circle
-                  cx="18" cy="18" r={RING_R}
-                  fill="none"
-                  stroke="#fff"
-                  strokeWidth="3"
-                  strokeDasharray={`${ringDash} ${RING_CIRC}`}
-                  strokeLinecap="round"
-                  transform="rotate(-90 18 18)"
-                />
-              </svg>
-              <span>↩ Undo</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="drop-slot__delete"
-              onClick={handleDeleteClick}
-              aria-label={`Remove ${label} image`}
-            >
-              Delete
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="drop-slot__placeholder">
-          <p>Drag & drop an image</p>
-          <span>or click Browse</span>
-        </div>
-      )}
-      {!displayValue && (
-        <>
-          <div className="drop-slot__actions">
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Browse
-            </button>
-            {urlMode === 'prompt' && (
-              <button type="button" className="ghost" onClick={handleUrlPrompt}>
-                Paste URL
-              </button>
-            )}
-          </div>
-          {urlMode === 'inline' && (
-            <div className="drop-slot__url">
-              <input
-                type="text"
-                placeholder="Paste image URL"
-                value={urlInput}
-                onChange={(event) => setUrlInput(event.target.value)}
-                onKeyDown={handleUrlKeyDown}
-              />
-              <button type="button" className="ghost" onClick={handleUrlAdd}>
-                Add URL
-              </button>
-            </div>
-          )}
-        </>
-      )}
-      <input
-        ref={fileInputRef}
-        className="drop-slot__file"
-        type="file"
-        accept="image/*"
-        onChange={handleBrowse}
-      />
-    </div>
-  )
-}
-
-function SlideCanvas({
-  pair,
-  slots = DEFAULT_SLOTS,
-  onChange,
-  backgroundUrl,
-  showText,
-  textValue,
-  textPlaceholder,
-  textBoxes = [],
-  onTextChange,
-}) {
-  const displayText = textValue?.trim() || textPlaceholder || ''
-  return (
-    <div
-      className="slide-canvas"
-      style={{ backgroundImage: `url(${backgroundUrl})` }}
-    >
-      {showText && displayText && (
-        <div className="slide-text" aria-hidden="true">
-          {displayText}
-        </div>
-      )}
-      {slots.map((slot) => (
-        <DropSlot
-          key={slot.key}
-          label={slot.label}
-          value={pair?.[slot.key]}
-          onChange={(value) => onChange(slot.key, value)}
-          className={slot.className}
-          style={slot.style}
-          urlMode={slot.urlMode || 'inline'}
-        />
-      ))}
-      {textBoxes.map((box) => {
-        const textVal = pair?.[box.key] ?? ''
-        return (
-          <input
-            key={box.key}
-            type="text"
-            className="custom-slide-textbox-input"
-            value={textVal}
-            onChange={(e) => onTextChange?.(box.key, e.target.value)}
-            placeholder={box.textDefault || 'Enter text'}
-            style={{
-              position: 'absolute',
-              left: `${(box.x / 13.333) * 100}%`,
-              top: `${(box.y / 7.5) * 100}%`,
-              width: `${(box.w / 13.333) * 100}%`,
-              height: `${(box.h / 7.5) * 100}%`,
-              fontSize: `${((box.fontSize || 20) * 0.104).toFixed(3)}cqw`,
-              fontFamily: box.fontFace || 'Calibri',
-              color: box.fontColor ? `#${box.fontColor}` : '#111111',
-              fontWeight: box.bold ? 'bold' : 'normal',
-              textAlign: box.align || 'center',
-              background: 'rgba(255, 255, 255, 0.75)',
-              border: '1px dashed rgba(11, 122, 56, 0.4)',
-              borderRadius: '8px',
-              padding: '4px 8px',
-              outline: 'none',
-              boxSizing: 'border-box',
-            }}
-          />
-        )
-      })}
-    </div>
-  )
-}
-
 function App({ data }) {
   const currentRoute = normalizeRoute(window.location.pathname)
   // ── Preset management state ─────────────────────────────────────────────
@@ -1048,6 +93,15 @@ function App({ data }) {
   const [firstSlideData, setFirstSlideData] = useState({})
   const [lastSlideData, setLastSlideData] = useState({})
   const [isHydrated, setIsHydrated] = useState(false)
+
+  // ── Imported first/last slide state (master route only) ─────────────────
+  const [importedFirstSlide, setImportedFirstSlide] = useState(null)
+  const [importedLastSlide, setImportedLastSlide] = useState(null)
+  const [useTemplateFirst, setUseTemplateFirst] = useState(false)
+  const [useTemplateLast, setUseTemplateLast] = useState(false)
+  // Refs hold the latest edited data so canvas render can access it without stale closures
+  const importedFirstSlideRef = useRef(null)
+  const importedLastSlideRef = useRef(null)
 
   useEffect(() => {
     const loadCustomData = async () => {
@@ -1120,8 +174,6 @@ function App({ data }) {
   const handleLoadPreset = async (id) => {
     setActivePresetId(id)
     await saveActivePresetId(id)
-    // Load slide data that belongs to this specific preset (don't clear it —
-    // each preset stores its own data under a scoped key)
     const first = await loadPairsFromDb(`pptxpro:custom-first-slide-data:${id}`)
     const last = await loadPairsFromDb(`pptxpro:custom-last-slide-data:${id}`)
     setFirstSlideData(first || {})
@@ -1180,25 +232,18 @@ function App({ data }) {
           return
         }
 
-        // Support both a single preset object and an array of presets
         const incoming = Array.isArray(parsed) ? parsed : (parsed && parsed.id ? [parsed] : [])
-
         if (incoming.length === 0) {
           alert('❌ No templates found in the file.')
           return
         }
 
-        // Relaxed validation — only require that layout exists
-        const valid = incoming.filter(
-          (p) => p && typeof p === 'object' && p.layout
-        )
-
+        const valid = incoming.filter((p) => p && typeof p === 'object' && p.layout)
         if (valid.length === 0) {
           alert('❌ The file does not contain valid template data. Each template must have a "layout" field.')
           return
         }
 
-        // Ensure every imported preset has a valid id
         const sanitized = valid.map((p) => ({
           ...p,
           id: typeof p.id === 'string' && p.id ? p.id : `preset_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -1206,7 +251,6 @@ function App({ data }) {
           createdAt: p.createdAt || Date.now(),
         }))
 
-        // Merge: re-id any collisions with existing presets
         const existingIds = new Set(masterPresets.map((p) => p.id))
         const toAdd = sanitized.map((p) => {
           if (existingIds.has(p.id)) {
@@ -1223,7 +267,6 @@ function App({ data }) {
         setMasterPresets(updated)
         await saveMasterPresets(updated)
 
-        // Auto-load the first imported preset if none is active
         if (!activePresetId && toAdd.length > 0) {
           setActivePresetId(toAdd[0].id)
           await saveActivePresetId(toAdd[0].id)
@@ -1241,7 +284,7 @@ function App({ data }) {
   }
 
   const handleRenamePreset = async (id, newName) => {
-    const updated = masterPresets.map((p) => p.id === id ? { ...p, name: newName } : p)
+    const updated = masterPresets.map((p) => (p.id === id ? { ...p, name: newName } : p))
     setMasterPresets(updated)
     await saveMasterPresets(updated)
   }
@@ -1344,9 +387,9 @@ function App({ data }) {
             height: `${(p.h / 7.5) * 100}%`,
             position: 'absolute',
             borderRadius: p.borderRadius ? `${p.borderRadius}px` : '0px',
-          }
+          },
         })),
-        textBoxes: customLayout?.textboxes || []
+        textBoxes: customLayout?.textboxes || [],
       }
     }
     if (currentRoute === ROUTES.pptxEditor) {
@@ -1370,11 +413,9 @@ function App({ data }) {
   }, [template])
   const requiresText = Boolean(template.textBox)
   const textDefault = template.textDefault || ''
-  // On the master route each preset gets its own storage bucket so images
-  // don't bleed between templates.
   const storageKey =
     currentRoute === ROUTES.master && activePresetId
-      ? `${STORAGE_PREFIX}:${currentRoute}:${activePresetId}`
+      ? `pptxpro:slides:v1:${currentRoute}:${activePresetId}`
       : buildStorageKey(
           currentRoute,
           currentRoute === ROUTES.dailyPlot ? dailyVariant : '',
@@ -1470,7 +511,12 @@ function App({ data }) {
       hydrationRef.current.skipSave = false
       return
     }
-    savePairsToStorage(storageKey, pairs, { slotKeys, requiresText })
+    savePairsToStorage(storageKey, pairs, {
+      slotKeys,
+      requiresText,
+      hasPairContent,
+      trimTrailingEmptyPairs,
+    })
   }, [pairs, storageKey, slotKeys, requiresText, isHydrated])
 
   useEffect(() => {
@@ -1633,19 +679,37 @@ function App({ data }) {
       setImportStatus({ type: 'working', message: 'Importing PPTX...' })
       const skipFirstSlides = template.importSkipFirst ?? 1
       const skipLastSlides = template.importSkipLast ?? 1
-      const { importPptxSlides } = await loadImportPptxModule()
+      const { importPptxSlides, importFirstLastSlideData } = await loadImportPptxModule()
       const { pairs: importedPairs, importedSlides, emptySlides } =
         await importPptxSlides(file, {
           skipFirstSlides,
           skipLastSlides,
           imageCount: template.imageCount || slotKeys.length,
-          // On the master route, pass textbox definitions so text is auto-extracted
           textboxDefs: currentRoute === ROUTES.master ? (customLayout?.textboxes || []) : [],
         })
 
       setPairs(
         normalizePairs(importedPairs, { slotKeys, requiresText, textDefault }),
       )
+
+      if (currentRoute === ROUTES.master) {
+        try {
+          const { firstSlide, lastSlide } = await importFirstLastSlideData(file)
+          if (firstSlide) {
+            setImportedFirstSlide(firstSlide)
+            importedFirstSlideRef.current = firstSlide
+            setUseTemplateFirst(false)
+          }
+          if (lastSlide) {
+            setImportedLastSlide(lastSlide)
+            importedLastSlideRef.current = lastSlide
+            setUseTemplateLast(false)
+          }
+        } catch (err) {
+          console.warn('Could not extract first/last slide elements:', err)
+        }
+      }
+
       const emptyNote = emptySlides
         ? ` ${emptySlides} slide(s) need images.`
         : ''
@@ -1691,13 +755,25 @@ function App({ data }) {
       await removePairsFromDb(storageKey)
     } finally {
       setPairs(normalizePairs([], { slotKeys, requiresText, textDefault }))
+      setImportedFirstSlide(null)
+      importedFirstSlideRef.current = null
+      setUseTemplateFirst(false)
+      setImportedLastSlide(null)
+      importedLastSlideRef.current = null
+      setUseTemplateLast(false)
       setImportStatus({ type: 'idle', message: '' })
       setDragIndex(null)
       setDragOverIndex(null)
     }
   }
 
-  // Shared report options builder to avoid duplication
+  // "Use Template" / "Use Imported" handlers — toggle slide mode while retaining imported state
+  const handleUseTemplateFirst = () => setUseTemplateFirst(true)
+  const handleUseImportedFirst = () => setUseTemplateFirst(false)
+
+  const handleUseTemplateLast = () => setUseTemplateLast(true)
+  const handleUseImportedLast = () => setUseTemplateLast(false)
+
   const buildReportOptions = (overrides = {}) => {
     const resolvedFirstSlideUrl =
       currentRoute === ROUTES.dailyPlot && dailyVariant === 'rural'
@@ -1748,20 +824,98 @@ function App({ data }) {
     }
   }
 
-  const handleDownload = async () => {
-    if (!canDownload) {
-      return
-    }
+  const triggerBlobDownload = (blob, fileName) => {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
+  }
+
+  const reportFileHandleRef = useRef(null)
+
+  const handleSaveReportDirect = async (forceSaveAs = false) => {
+    if (!canDownload) return
     try {
       setIsGenerating(true)
       const { generateReport } = await loadGenerateReportModule()
-      await generateReport(pairs, buildReportOptions())
+      const { blob, fileName } = await generateReport(pairs, buildReportOptions())
+
+      let finalBlob = blob
+      if (currentRoute === ROUTES.master && (importedFirstSlide || importedLastSlide)) {
+        const { postProcessPptxWithImportedSlides } = await loadImportPptxModule()
+        const firstOpts = importedFirstSlide && !useTemplateFirst
+          ? { importedSlide: importedFirstSlide, editedSlide: importedFirstSlideRef.current }
+          : null
+        const lastOpts = importedLastSlide && !useTemplateLast
+          ? { importedSlide: importedLastSlide, editedSlide: importedLastSlideRef.current }
+          : null
+        finalBlob = await postProcessPptxWithImportedSlides(blob, firstOpts, lastOpts)
+      }
+
+      if (!forceSaveAs && reportFileHandleRef.current && typeof reportFileHandleRef.current.createWritable === 'function') {
+        const writable = await reportFileHandleRef.current.createWritable()
+        await writable.write(finalBlob)
+        await writable.close()
+        alert(`✓ Saved directly to "${reportFileHandleRef.current.name}" on disk!`)
+      } else if (typeof window.showSaveFilePicker === 'function') {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: fileName,
+          types: [
+            {
+              description: 'PowerPoint Presentation',
+              accept: {
+                'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+              },
+            },
+          ],
+        })
+        const writable = await handle.createWritable()
+        await writable.write(finalBlob)
+        await writable.close()
+        reportFileHandleRef.current = handle
+        alert(`✓ Saved to "${handle.name}" on disk!`)
+      } else {
+        triggerBlobDownload(finalBlob, fileName)
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Save report error:', err)
+        alert('Failed to save presentation: ' + err.message)
+      }
     } finally {
       setIsGenerating(false)
     }
   }
 
-  // ── Download completed slides only (PPTX) ──────────────────────────────
+  const handleDownload = async () => {
+    if (!canDownload) return
+    try {
+      setIsGenerating(true)
+      const { generateReport } = await loadGenerateReportModule()
+      const { blob, fileName } = await generateReport(pairs, buildReportOptions())
+
+      if (currentRoute === ROUTES.master && (importedFirstSlide || importedLastSlide)) {
+        const { postProcessPptxWithImportedSlides } = await loadImportPptxModule()
+        const firstOpts = importedFirstSlide && !useTemplateFirst
+          ? { importedSlide: importedFirstSlide, editedSlide: importedFirstSlideRef.current }
+          : null
+        const lastOpts = importedLastSlide && !useTemplateLast
+          ? { importedSlide: importedLastSlide, editedSlide: importedLastSlideRef.current }
+          : null
+        const finalBlob = await postProcessPptxWithImportedSlides(blob, firstOpts, lastOpts)
+        triggerBlobDownload(finalBlob, fileName)
+      } else {
+        triggerBlobDownload(blob, fileName)
+      }
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
   const [isGeneratingCompleted, setIsGeneratingCompleted] = useState(false)
   const canDownloadCompleted = slideCount > 0 && !isGenerating && !isGeneratingCompleted && !isImporting
 
@@ -1770,18 +924,31 @@ function App({ data }) {
     try {
       setIsGeneratingCompleted(true)
       const { generateCompletedSlidesReport } = await loadGenerateReportModule()
-      // Build a fileName that marks the file as completed-only
       const baseOptions = buildReportOptions()
       const completedFileName = baseOptions.fileName
         ? baseOptions.fileName.replace(/\.pptx$/i, '_Completed.pptx')
         : `${template.fileNamePrefix || 'Report'}_Completed.pptx`
-      await generateCompletedSlidesReport(pairs, { ...baseOptions, fileName: completedFileName })
+      const { blob, fileName } = await generateCompletedSlidesReport(
+        pairs, { ...baseOptions, fileName: completedFileName }
+      )
+      if (currentRoute === ROUTES.master && (importedFirstSlide || importedLastSlide)) {
+        const { postProcessPptxWithImportedSlides } = await loadImportPptxModule()
+        const firstOpts = importedFirstSlide && !useTemplateFirst
+          ? { importedSlide: importedFirstSlide, editedSlide: importedFirstSlideRef.current }
+          : null
+        const lastOpts = importedLastSlide && !useTemplateLast
+          ? { importedSlide: importedLastSlide, editedSlide: importedLastSlideRef.current }
+          : null
+        const finalBlob = await postProcessPptxWithImportedSlides(blob, firstOpts, lastOpts)
+        triggerBlobDownload(finalBlob, fileName)
+      } else {
+        triggerBlobDownload(blob, fileName)
+      }
     } finally {
       setIsGeneratingCompleted(false)
     }
   }
 
-  // ── Export remaining images from incomplete slides as ZIP ───────────────
   const [isExportingZip, setIsExportingZip] = useState(false)
 
   const incompletePairsForZip = pairs.filter((pair) => {
@@ -1799,7 +966,6 @@ function App({ data }) {
       let fileIndex = 1
 
       for (const pair of incompletePairsForZip) {
-        // Collect all images present in this pair across all slot keys
         for (const key of slotKeys) {
           const imgData = pair?.[key]
           if (!imgData || typeof imgData !== 'string') continue
@@ -1808,7 +974,6 @@ function App({ data }) {
           let ext = 'jpg'
 
           if (imgData.startsWith('data:')) {
-            // data URL → extract mime and base64
             const mimeMatch = imgData.match(/^data:([^;]+);base64,/)
             const mime = mimeMatch?.[1] || 'image/jpeg'
             const b64 = imgData.replace(/^data:[^;]+;base64,/, '')
@@ -1823,7 +988,6 @@ function App({ data }) {
             else if (mime.includes('gif')) ext = 'gif'
             else ext = 'jpg'
           } else {
-            // URL — fetch the image
             try {
               const response = await fetch(imgData)
               blob = await response.blob()
@@ -1833,7 +997,6 @@ function App({ data }) {
               else if (ct.includes('gif')) ext = 'gif'
               else ext = 'jpg'
             } catch {
-              // Skip images that can't be fetched
               continue
             }
           }
@@ -1886,55 +1049,74 @@ function App({ data }) {
             <p className="app__subtext">{template.subtext}</p>
           </div>
           <div className="app__actions">
-            {!(currentRoute === ROUTES.master && designerMode === 'design') && currentRoute !== ROUTES.extract && currentRoute !== ROUTES.collage && currentRoute !== ROUTES.merge && currentRoute !== ROUTES.pdf && currentRoute !== ROUTES.mergePdf && currentRoute !== ROUTES.gpsPdf && currentRoute !== ROUTES.pptxToPdf && currentRoute !== ROUTES.pptxEditor && (
-              <>
-                <div className="app__badge">Slides ready: {slideCount}</div>
-                <button
-                  type="button"
-                  className="button button--secondary"
-                  onClick={handlePptxButtonClick}
-                  disabled={isImporting}
-                >
-                  {isImporting ? 'Importing...' : 'Upload PPTX'}
-                </button>
-                <button type="button" className="ghost" onClick={handleClearStored}>
-                  Clear Saved
-                </button>
-                <input
-                  ref={pptxInputRef}
-                  className="file-input"
-                  type="file"
-                  accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                  onChange={handlePptxUpload}
-                />
-                <button
-                  type="button"
-                  className="button button--completed"
-                  onClick={handleDownloadCompleted}
-                  disabled={!canDownloadCompleted}
-                  title={`Export only the ${slideCount} complete slide(s) as PPTX`}
-                >
-                  {isGeneratingCompleted ? 'Building...' : `✅ Completed (${slideCount})`}
-                </button>
-                <button
-                  type="button"
-                  className="button button--zip"
-                  onClick={handleExportRemainingPics}
-                  disabled={!canExportZip}
-                  title={`Export images from ${incompletePairsForZip.length} incomplete slide(s) as ZIP`}
-                >
-                  {isExportingZip ? 'Zipping...' : `📦 Remaining Pics (${incompletePairsForZip.length})`}
-                </button>
-                <button
-                  type="button"
-                  className="button"
-                  onClick={handleDownload}
-                  disabled={!canDownload}
-                >
-                  {isGenerating ? 'Building PPTX...' : 'Download Report'}
-                </button>
-              </>
-            )}
+            {!(currentRoute === ROUTES.master && designerMode === 'design') &&
+              currentRoute !== ROUTES.extract &&
+              currentRoute !== ROUTES.collage &&
+              currentRoute !== ROUTES.merge &&
+              currentRoute !== ROUTES.pdf &&
+              currentRoute !== ROUTES.mergePdf &&
+              currentRoute !== ROUTES.gpsPdf &&
+              currentRoute !== ROUTES.pptxToPdf &&
+              currentRoute !== ROUTES.pptxEditor && (
+                <>
+                  <div className="app__badge">Slides ready: {slideCount}</div>
+                  <button
+                    type="button"
+                    className="button button--secondary"
+                    onClick={handlePptxButtonClick}
+                    disabled={isImporting}
+                  >
+                    {isImporting ? 'Importing...' : 'Upload PPTX'}
+                  </button>
+                  <button type="button" className="ghost" onClick={handleClearStored}>
+                    Clear Saved
+                  </button>
+                  <input
+                    ref={pptxInputRef}
+                    className="file-input"
+                    type="file"
+                    accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    onChange={handlePptxUpload}
+                  />
+                  <button
+                    type="button"
+                    className="button button--completed"
+                    onClick={handleDownloadCompleted}
+                    disabled={!canDownloadCompleted}
+                    title={`Export only the ${slideCount} complete slide(s) as PPTX`}
+                  >
+                    {isGeneratingCompleted ? 'Building...' : `✅ Completed (${slideCount})`}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--zip"
+                    onClick={handleExportRemainingPics}
+                    disabled={!canExportZip}
+                    title={`Export images from ${incompletePairsForZip.length} incomplete slide(s) as ZIP`}
+                  >
+                    {isExportingZip ? 'Zipping...' : `📦 Remaining Pics (${incompletePairsForZip.length})`}
+                  </button>
+                  <button
+                    type="button"
+                    className="button"
+                    style={{ background: 'linear-gradient(135deg, #10b981, #059669)', borderColor: 'transparent', color: '#fff' }}
+                    onClick={() => handleSaveReportDirect(false)}
+                    disabled={!canDownload}
+                    title="Save report directly to file on disk without downloading separate copies"
+                  >
+                    {isGenerating ? 'Building...' : '💾 Save File'}
+                  </button>
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={handleDownload}
+                    disabled={!canDownload}
+                    title="Download a separate copy file via browser"
+                  >
+                    {isGenerating ? 'Building PPTX...' : '⬇️ Download Report'}
+                  </button>
+                </>
+              )}
           </div>
         </header>
       )}
@@ -1982,17 +1164,15 @@ function App({ data }) {
           <MasterDesigner
             customLayout={customLayout}
             onSave={async (layout) => {
-              // Overwrite active preset's layout
               if (activePresetId) {
                 const updated = masterPresets.map((p) =>
-                  p.id === activePresetId ? { ...p, layout } : p
+                  p.id === activePresetId ? { ...p, layout } : p,
                 )
                 setMasterPresets(updated)
                 await saveMasterPresets(updated)
                 alert('Active preset updated! Switch to "Use Template" to use it.')
                 setDesignerMode('use')
               } else {
-                // No active preset - save as new unnamed preset
                 await handleSaveNewPreset('Default', layout)
               }
             }}
@@ -2013,7 +1193,14 @@ function App({ data }) {
             <div>
               <p className="label">{template.themeLabel}</p>
               <p className="value">
-                Using background image: <span>{template.masterBgUrl ? (template.masterBgUrl.startsWith('data:') ? 'Custom background data' : template.masterBgUrl) : 'None'}</span>
+                Using background image:{' '}
+                <span>
+                  {template.masterBgUrl
+                    ? template.masterBgUrl.startsWith('data:')
+                      ? 'Custom background data'
+                      : template.masterBgUrl
+                    : 'None'}
+                </span>
               </p>
             </div>
             {currentRoute !== ROUTES.master && (
@@ -2025,228 +1212,195 @@ function App({ data }) {
             )}
           </section>
 
-      <section className="pairs">
-        {currentRoute === ROUTES.master && ((customLayout?.firstSlidePlaceholders?.length > 0) || (customLayout?.firstSlideTextboxes?.length > 0)) && (
-          <article className="pair" style={{ border: '2px solid rgba(11, 122, 56, 0.4)' }}>
-            <div className="pair__header">
-              <p className="label" style={{ fontWeight: 'bold', color: '#0b7a38' }}>Title Slide (First Slide)</p>
-              <span className="pair__status is-complete">Cover Slide</span>
-            </div>
-            <SlideCanvas
-              pair={firstSlideData}
-              slots={(customLayout?.firstSlidePlaceholders || []).map((p) => ({
-                key: p.key,
-                label: p.label,
-                className: 'slide-slot',
-                style: {
-                  left: `${(p.x / 13.333) * 100}%`,
-                  top: `${(p.y / 7.5) * 100}%`,
-                  width: `${(p.w / 13.333) * 100}%`,
-                  height: `${(p.h / 7.5) * 100}%`,
-                  position: 'absolute',
-                  borderRadius: p.borderRadius ? `${p.borderRadius}px` : '0px',
-                }
-              }))}
-              onChange={(key, value) => {
-                setFirstSlideData((prev) => {
-                  const next = { ...prev, [key]: value }
-                  if (activePresetId) savePairsToDb(`pptxpro:custom-first-slide-data:${activePresetId}`, next)
-                  return next
-                })
-              }}
-              backgroundUrl={customLayout?.firstSlideUrl}
-              textBoxes={customLayout?.firstSlideTextboxes || []}
-              onTextChange={(key, value) => {
-                setFirstSlideData((prev) => {
-                  const next = { ...prev, [key]: value }
-                  if (activePresetId) savePairsToDb(`pptxpro:custom-first-slide-data:${activePresetId}`, next)
-                  return next
-                })
-              }}
-            />
-          </article>
-        )}
-        {pairs.map((pair, index) => {
-          const canDrag = hasPairContent(pair, { slotKeys, requiresText })
-          const isDragging = dragIndex === index
-          const isDragOver = dragOverIndex === index
-          const isMenuOpen = moveMenuIndex === index
-          const canMove = canDrag && movableCount > 1
-          return (
-            <article
-              key={`pair-${index}`}
-              className={`pair${isDragging ? ' is-dragging' : ''}${
-                isDragOver ? ' is-drag-over' : ''
-              }`}
-              ref={(node) => {
-                pairRefs.current[index] = node
-              }}
-              onDragOver={(event) => handlePairDragOver(event, index)}
-              onDrop={(event) => handlePairDrop(event, index)}
-            >
-              <div className="pair__header">
-                <p className="label">Pair {index + 1}</p>
-                <div className="pair__controls">
-                  {(() => {
-                    const isComplete = isPairComplete(pair, {
-                      slotKeys,
-                      requiresText,
-                    })
-                    const statusLabel = isComplete
-                      ? 'Complete'
-                      : hasPairContent(pair, { slotKeys, requiresText })
-                        ? 'In progress'
-                        : 'Empty'
-                    return (
-                      <span
-                        className={`pair__status${isComplete ? ' is-complete' : ''}`}
-                      >
-                        {statusLabel}
-                      </span>
-                    )
-                  })()}
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => swapPairImages(index)}
-                    disabled={!slotKeys.some((key) => pair?.[key])}
-                    title="Swap before and after images"
-                  >
-                    Swap
-                  </button>
-                  <div
-                    className="pair__move"
-                    ref={isMenuOpen ? moveMenuRef : null}
-                  >
-                    <button
-                      type="button"
-                      className="pair__drag"
-                      draggable={canDrag}
-                      disabled={!canMove}
-                      aria-label="Drag to reorder or click to move"
-                      aria-expanded={isMenuOpen}
-                      aria-haspopup="menu"
-                      title={
-                        canMove
-                          ? 'Drag to reorder or click to move'
-                          : 'Add another slide to enable moving'
-                      }
-                      onDragStart={(event) => handlePairDragStart(event, index)}
-                      onDragEnd={handlePairDragEnd}
-                      onClick={(event) => {
-                        if (!canMove) {
-                          return
-                        }
-                        event.stopPropagation()
-                        setMoveMenuIndex((prev) =>
-                          prev === index ? null : index,
-                        )
-                      }}
-                    >
-                      Drag
-                    </button>
-                    {isMenuOpen && (
-                      <div className="pair__move-menu" role="menu">
-                        <p className="pair__move-title">Move to position</p>
-                        <div className="pair__move-list">
-                          {Array.from({ length: movableCount }, (_, target) => {
-                            const position = target + 1
-                            const isCurrent = target === index
-                            return (
-                              <button
-                                type="button"
-                                key={`move-${index}-to-${position}`}
-                                className={`pair__move-option${
-                                  isCurrent ? ' is-current' : ''
-                                }`}
-                                disabled={isCurrent}
-                                onClick={() => {
-                                  movePair(index, target)
-                                  setMoveMenuIndex(null)
-                                }}
-                              >
-                                {position}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              {template.textBox && (
-                <div className="pair__text">
-                  <label className="label" htmlFor={`pair-text-${index}`}>
-                    {template.textLabel || 'Slide text'}
-                  </label>
-                  <input
-                    id={`pair-text-${index}`}
-                    type="text"
-                    value={pair.slideText || ''}
-                    onChange={(event) =>
-                      updatePair(index, 'slideText', event.target.value)
-                    }
-                    placeholder={template.textDefault || 'Enter text'}
-                  />
-                </div>
-              )}
-              <SlideCanvas
-                pair={pair}
-                slots={template.slots}
-                onChange={(key, value) => updatePair(index, key, value)}
-                backgroundUrl={template.masterBgUrl}
-                showText={Boolean(template.textBox)}
-                textValue={pair.slideText || ''}
-                textPlaceholder={template.textDefault || ''}
-                textBoxes={template.textBoxes || []}
-                onTextChange={(key, value) => updatePair(index, key, value)}
+          <section className="pairs">
+            {/* ── First slide: imported editor or template slide ── */}
+            {currentRoute === ROUTES.master && importedFirstSlide && !useTemplateFirst ? (
+              <ImportedSlideEditor
+                title="First Slide (from imported PPTX)"
+                slideData={importedFirstSlide}
+                templateUrl={customLayout?.firstSlideUrl}
+                onUseTemplate={handleUseTemplateFirst}
+                onChange={(data) => {
+                  importedFirstSlideRef.current = data
+                }}
               />
-            </article>
-          )
-        })}
-        {currentRoute === ROUTES.master && ((customLayout?.lastSlidePlaceholders?.length > 0) || (customLayout?.lastSlideTextboxes?.length > 0)) && (
-          <article className="pair" style={{ border: '2px solid rgba(11, 122, 56, 0.4)' }}>
-            <div className="pair__header">
-              <p className="label" style={{ fontWeight: 'bold', color: '#0b7a38' }}>Closing Slide (Last Slide)</p>
-              <span className="pair__status is-complete">End Slide</span>
-            </div>
-            <SlideCanvas
-              pair={lastSlideData}
-              slots={(customLayout?.lastSlidePlaceholders || []).map((p) => ({
-                key: p.key,
-                label: p.label,
-                className: 'slide-slot',
-                style: {
-                  left: `${(p.x / 13.333) * 100}%`,
-                  top: `${(p.y / 7.5) * 100}%`,
-                  width: `${(p.w / 13.333) * 100}%`,
-                  height: `${(p.h / 7.5) * 100}%`,
-                  position: 'absolute',
-                  borderRadius: p.borderRadius ? `${p.borderRadius}px` : '0px',
-                }
-              }))}
-              onChange={(key, value) => {
-                setLastSlideData((prev) => {
-                  const next = { ...prev, [key]: value }
-                  if (activePresetId) savePairsToDb(`pptxpro:custom-last-slide-data:${activePresetId}`, next)
-                  return next
-                })
-              }}
-              backgroundUrl={customLayout?.lastSlideUrl}
-              textBoxes={customLayout?.lastSlideTextboxes || []}
-              onTextChange={(key, value) => {
-                setLastSlideData((prev) => {
-                  const next = { ...prev, [key]: value }
-                  if (activePresetId) savePairsToDb(`pptxpro:custom-last-slide-data:${activePresetId}`, next)
-                  return next
-                })
-              }}
-            />
-          </article>
-        )}
-      </section>
-      </>
+            ) : (
+              currentRoute === ROUTES.master && (
+                <>
+                  {importedFirstSlide && useTemplateFirst && (
+                    <article className="pair" style={{ border: '2px solid rgba(124, 58, 237, 0.4)', background: 'rgba(124, 58, 237, 0.03)' }}>
+                      <div className="pair__header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                          <p className="label" style={{ margin: 0, color: '#7c3aed', fontWeight: 700 }}>
+                            📎 First Slide: Using Default Template Slide
+                          </p>
+                          <span className="pair__status">Template Mode Active</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={handleUseImportedFirst}
+                          style={{ borderColor: '#7c3aed', color: '#7c3aed', fontWeight: 600 }}
+                          title="Switch back to using and editing the first slide imported from the PPTX"
+                        >
+                          ↩ Use Imported Slide
+                        </button>
+                      </div>
+                    </article>
+                  )}
+
+                  {((customLayout?.firstSlidePlaceholders?.length > 0) || (customLayout?.firstSlideTextboxes?.length > 0)) && (
+                    <article className="pair" style={{ border: '2px solid rgba(11, 122, 56, 0.4)' }}>
+                      <div className="pair__header">
+                        <p className="label" style={{ fontWeight: 'bold', color: '#0b7a38' }}>Title Slide (First Slide)</p>
+                        <span className="pair__status is-complete">Cover Slide</span>
+                      </div>
+                      <SlideCanvas
+                        pair={firstSlideData}
+                        slots={(customLayout?.firstSlidePlaceholders || []).map((p) => ({
+                          key: p.key,
+                          label: p.label,
+                          className: 'slide-slot',
+                          style: {
+                            left: `${(p.x / 13.333) * 100}%`,
+                            top: `${(p.y / 7.5) * 100}%`,
+                            width: `${(p.w / 13.333) * 100}%`,
+                            height: `${(p.h / 7.5) * 100}%`,
+                            position: 'absolute',
+                            borderRadius: p.borderRadius ? `${p.borderRadius}px` : '0px',
+                          },
+                        }))}
+                        onChange={(key, value) => {
+                          setFirstSlideData((prev) => {
+                            const next = { ...prev, [key]: value }
+                            if (activePresetId) savePairsToDb(`pptxpro:custom-first-slide-data:${activePresetId}`, next)
+                            return next
+                          })
+                        }}
+                        backgroundUrl={customLayout?.firstSlideUrl}
+                        textBoxes={customLayout?.firstSlideTextboxes || []}
+                        onTextChange={(key, value) => {
+                          setFirstSlideData((prev) => {
+                            const next = { ...prev, [key]: value }
+                            if (activePresetId) savePairsToDb(`pptxpro:custom-first-slide-data:${activePresetId}`, next)
+                            return next
+                          })
+                        }}
+                      />
+                    </article>
+                  )}
+                </>
+              )
+            )}
+
+            {pairs.map((pair, index) => (
+              <PairCard
+                key={`pair-${index}`}
+                pair={pair}
+                index={index}
+                template={template}
+                slotKeys={slotKeys}
+                requiresText={requiresText}
+                movableCount={movableCount}
+                dragIndex={dragIndex}
+                dragOverIndex={dragOverIndex}
+                moveMenuIndex={moveMenuIndex}
+                pairRef={(node) => {
+                  pairRefs.current[index] = node
+                }}
+                moveMenuRef={moveMenuRef}
+                onUpdatePair={updatePair}
+                onSwapImages={swapPairImages}
+                onDragStart={handlePairDragStart}
+                onDragEnd={handlePairDragEnd}
+                onDragOver={handlePairDragOver}
+                onDrop={handlePairDrop}
+                onMovePair={movePair}
+                onSetMoveMenuIndex={setMoveMenuIndex}
+              />
+            ))}
+
+            {/* ── Last slide: imported editor or template slide ── */}
+            {currentRoute === ROUTES.master && importedLastSlide && !useTemplateLast ? (
+              <ImportedSlideEditor
+                title="Last Slide (from imported PPTX)"
+                slideData={importedLastSlide}
+                templateUrl={customLayout?.lastSlideUrl}
+                onUseTemplate={handleUseTemplateLast}
+                onChange={(data) => {
+                  importedLastSlideRef.current = data
+                }}
+              />
+            ) : (
+              currentRoute === ROUTES.master && (
+                <>
+                  {importedLastSlide && useTemplateLast && (
+                    <article className="pair" style={{ border: '2px solid rgba(124, 58, 237, 0.4)', background: 'rgba(124, 58, 237, 0.03)' }}>
+                      <div className="pair__header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                          <p className="label" style={{ margin: 0, color: '#7c3aed', fontWeight: 700 }}>
+                            📎 Last Slide: Using Default Template Slide
+                          </p>
+                          <span className="pair__status">Template Mode Active</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={handleUseImportedLast}
+                          style={{ borderColor: '#7c3aed', color: '#7c3aed', fontWeight: 600 }}
+                          title="Switch back to using and editing the last slide imported from the PPTX"
+                        >
+                          ↩ Use Imported Slide
+                        </button>
+                      </div>
+                    </article>
+                  )}
+
+                  {((customLayout?.lastSlidePlaceholders?.length > 0) || (customLayout?.lastSlideTextboxes?.length > 0)) && (
+                    <article className="pair" style={{ border: '2px solid rgba(11, 122, 56, 0.4)' }}>
+                      <div className="pair__header">
+                        <p className="label" style={{ fontWeight: 'bold', color: '#0b7a38' }}>Closing Slide (Last Slide)</p>
+                        <span className="pair__status is-complete">End Slide</span>
+                      </div>
+                      <SlideCanvas
+                        pair={lastSlideData}
+                        slots={(customLayout?.lastSlidePlaceholders || []).map((p) => ({
+                          key: p.key,
+                          label: p.label,
+                          className: 'slide-slot',
+                          style: {
+                            left: `${(p.x / 13.333) * 100}%`,
+                            top: `${(p.y / 7.5) * 100}%`,
+                            width: `${(p.w / 13.333) * 100}%`,
+                            height: `${(p.h / 7.5) * 100}%`,
+                            position: 'absolute',
+                            borderRadius: p.borderRadius ? `${p.borderRadius}px` : '0px',
+                          },
+                        }))}
+                        onChange={(key, value) => {
+                          setLastSlideData((prev) => {
+                            const next = { ...prev, [key]: value }
+                            if (activePresetId) savePairsToDb(`pptxpro:custom-last-slide-data:${activePresetId}`, next)
+                            return next
+                          })
+                        }}
+                        backgroundUrl={customLayout?.lastSlideUrl}
+                        textBoxes={customLayout?.lastSlideTextboxes || []}
+                        onTextChange={(key, value) => {
+                          setLastSlideData((prev) => {
+                            const next = { ...prev, [key]: value }
+                            if (activePresetId) savePairsToDb(`pptxpro:custom-last-slide-data:${activePresetId}`, next)
+                            return next
+                          })
+                        }}
+                      />
+                    </article>
+                  )}
+                </>
+              )
+            )}
+          </section>
+        </>
       )}
     </main>
   )
